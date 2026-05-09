@@ -136,13 +136,13 @@ def nas_auto_share():
         print("[auto-share] NAS SSH not available, thread exiting")
         return
     time.sleep(5)
-    print("[auto-share] thread started, checking every 60s")
+    print("[auto-share] thread started, checking every 15s")
     while True:
         try:
             nas_folders = nas_api("GET", "/rest/config/folders")
             nas_devices = nas_api("GET", "/rest/config/devices")
             if not nas_folders or not nas_devices:
-                time.sleep(60)
+                time.sleep(15)
                 continue
 
             # NAS 的 /rest/config/devices 不包含自己，全是远端设备
@@ -168,7 +168,7 @@ def nas_auto_share():
                     print("[auto-share] NAS config updated")
         except Exception as e:
             print(f"[auto-share] error: {e}")
-        time.sleep(60)
+        time.sleep(15)
 
 
 # ===== 文件变化快速检测 =====
