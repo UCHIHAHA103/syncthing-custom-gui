@@ -33,9 +33,10 @@ ORDER_FILE = CONFIG_DIR / "folder-order.json"
 GLOBAL_IGNORE_FILE = CONFIG_DIR / ".stglobalignore"
 
 # NAS 远程配置（通过 SSH 调 NAS 上的 Syncthing API）
-NAS_SSH = os.environ.get("NAS_SSH", "user@192.168.x.x")
+NAS_SSH = os.environ.get("NAS_SSH", "")
 NAS_API_KEY = os.environ.get("NAS_API_KEY", "")
 NAS_SYNCTHING_DATA_PREFIX = "/var/syncthing"  # 容器内挂载路径前缀
+NAS_SSH_OK = False  # 运行时检测，SSH 不可用时自动降级
 
 # NAS 状态缓存（后台线程定期刷新，前端直接读取）
 _nas_status_cache = {}  # {folder_id: {globalFiles, globalBytes, state, lastUpdate}}
@@ -64,11 +65,28 @@ def save_nas_cache():
 
 def refresh_nas_status_cache():
     """后台线程：每 30 秒用单次 SSH 批量获取所有文件夹状态"""
-    global _nas_status_cache
+    global _nas_status_cache, NAS_SSH_OK
     import subprocess
+    if not NAS_SSH or not NAS_API_KEY:
+        print("[sidecar] NAS SSH 未配置，跳过远程缓存刷新（纯本地模式）")
+        return
+    # 首次检测 SSH 连通性
+    try:
+        test = subprocess.run(
+            ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", NAS_SSH, "echo ok"],
+            capture_output=True, text=True, timeout=10
+        )
+        if test.returncode == 0 and "ok" in test.stdout:
+            NAS_SSH_OK = True
+            print(f"[sidecar] NAS SSH 连通: {NAS_SSH}")
+        else:
+            print(f"[sidecar] NAS SSH 不可达: {NAS_SSH}，降级为纯本地模式")
+            return
+    except Exception as e:
+        print(f"[sidecar] NAS SSH 检测失败: {e}，降级为纯本地模式")
+        return
     while True:
         try:
-            # 单次 SSH 执行批量脚本：获取所有文件夹 ID 并逐个查 db/status
             batch_cmd = (
                 f"ids=$(curl -s -H 'X-API-Key: {NAS_API_KEY}' 'http://127.0.0.1:8384/rest/config/folders' "
                 f"| python3 -c \"import sys,json; [print(f['id']) for f in json.load(sys.stdin)]\" 2>/dev/null); "
@@ -175,6 +193,8 @@ def file_change_watcher():
 
 def nas_api(method, endpoint, data=None):
     """通过 SSH 调用 NAS 上的 Syncthing API"""
+    if not NAS_SSH_OK:
+        return None
     import subprocess
     import base64
 
@@ -197,6 +217,8 @@ def nas_api(method, endpoint, data=None):
 
 def fix_nas_folder_path(folder_id):
     """确保 NAS 端新文件夹路径在持久化卷下"""
+    if not NAS_SSH_OK:
+        return
     import urllib.parse
     encoded_id = urllib.parse.quote(folder_id, safe='')
 
@@ -625,57 +647,95 @@ class SidecarHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": "NAS 不可达"}, 502)
 
         elif path == "/api/nas-folders":
-            # 核心接口：返回 NAS 全部文件夹 + 本地同步状态 + NAS 端文件数/大小
-            nas_folders = nas_api("GET", "/rest/config/folders")
+            # 核心接口：返回 NAS 全部文件夹 + 本地同步状态
             local_config = syncthing_api("GET", "/rest/config")
             local_ids = {}
             if local_config:
                 for f in local_config.get("folders", []):
                     local_ids[f["id"]] = f
 
-            # 从缓存读取 NAS 端文件夹状态（不再实时 SSH 查询）
-            with _nas_status_lock:
-                nas_statuses = dict(_nas_status_cache)
-
             result = []
-            if nas_folders:
-                for nf in nas_folders:
-                    fid = nf.get("id", "")
-                    local_folder = local_ids.get(fid)
-                    local_path = local_folder["path"] if local_folder else ""
-                    # 检查本地路径是否存在
-                    local_exists = os.path.isdir(local_path) if local_path else False
-                    st = nas_statuses.get(fid, {})
-                    item = {
-                        "id": fid,
-                        "label": nf.get("label", "") or fid,
-                        "nasPath": nf.get("path", ""),
-                        "localPath": local_path if local_exists else "",
-                        "synced": local_folder is not None,
-                        "paused": local_folder["paused"] if local_folder else False,
-                        "type": nf.get("type", "sendreceive"),
-                        "localMissing": bool(local_path and not local_exists),
-                        "globalFiles": st.get("globalFiles", 0),
-                        "globalBytes": st.get("globalBytes", 0),
-                    }
-                    result.append(item)
 
-                # 添加仅本地存在的文件夹（NAS 还没有）
-                nas_ids = {nf["id"] for nf in nas_folders}
-                for fid, lf in local_ids.items():
-                    if fid not in nas_ids:
-                        lp = lf.get("path", "")
+            if NAS_SSH_OK:
+                # SSH 模式：从 NAS 获取完整文件夹列表
+                nas_folders = nas_api("GET", "/rest/config/folders")
+                with _nas_status_lock:
+                    nas_statuses = dict(_nas_status_cache)
+
+                if nas_folders:
+                    for nf in nas_folders:
+                        fid = nf.get("id", "")
+                        local_folder = local_ids.get(fid)
+                        local_path = local_folder["path"] if local_folder else ""
+                        local_exists = os.path.isdir(local_path) if local_path else False
+                        st = nas_statuses.get(fid, {})
                         result.append({
                             "id": fid,
-                            "label": lf.get("label", "") or fid,
-                            "nasPath": "",
-                            "localPath": lp if os.path.isdir(lp) else "",
-                            "synced": True,
-                            "paused": lf.get("paused", False),
-                            "type": lf.get("type", "sendreceive"),
-                            "localOnly": True,
-                            "localMissing": bool(lp and not os.path.isdir(lp)),
+                            "label": nf.get("label", "") or fid,
+                            "nasPath": nf.get("path", ""),
+                            "localPath": local_path if local_exists else "",
+                            "synced": local_folder is not None,
+                            "paused": local_folder["paused"] if local_folder else False,
+                            "type": nf.get("type", "sendreceive"),
+                            "localMissing": bool(local_path and not local_exists),
+                            "globalFiles": st.get("globalFiles", 0),
+                            "globalBytes": st.get("globalBytes", 0),
                         })
+                    # 添加仅本地存在的文件夹
+                    nas_ids = {nf["id"] for nf in nas_folders}
+                    for fid, lf in local_ids.items():
+                        if fid not in nas_ids:
+                            lp = lf.get("path", "")
+                            result.append({
+                                "id": fid,
+                                "label": lf.get("label", "") or fid,
+                                "nasPath": "",
+                                "localPath": lp if os.path.isdir(lp) else "",
+                                "synced": True,
+                                "paused": lf.get("paused", False),
+                                "type": lf.get("type", "sendreceive"),
+                                "localOnly": True,
+                                "localMissing": bool(lp and not os.path.isdir(lp)),
+                            })
+            else:
+                # 纯本地模式：从本地 Syncthing 获取已配置的文件夹
+                # 加上远端设备提议的待接受文件夹（pending folders）
+                for fid, lf in local_ids.items():
+                    lp = lf.get("path", "")
+                    local_exists = os.path.isdir(lp) if lp else False
+                    result.append({
+                        "id": fid,
+                        "label": lf.get("label", "") or fid,
+                        "nasPath": "",
+                        "localPath": lp if local_exists else "",
+                        "synced": True,
+                        "paused": lf.get("paused", False),
+                        "type": lf.get("type", "sendreceive"),
+                        "localMissing": bool(lp and not local_exists),
+                    })
+                # 获取远端设备提议但还没接受的文件夹
+                pending = syncthing_api("GET", "/rest/cluster/pending/folders")
+                if pending:
+                    for fid, info in pending.items():
+                        if fid not in local_ids:
+                            # info 格式: {deviceID: {time, label, ...}, ...}
+                            label = fid
+                            for dev_info in info.values():
+                                if dev_info.get("label"):
+                                    label = dev_info["label"]
+                                    break
+                            result.append({
+                                "id": fid,
+                                "label": label,
+                                "nasPath": "",
+                                "localPath": "",
+                                "synced": False,
+                                "paused": False,
+                                "type": "sendreceive",
+                                "localMissing": False,
+                                "pending": True,
+                            })
+
             self.send_json({"folders": result})
 
         elif path == "/api/browse-dir":
@@ -915,28 +975,31 @@ class SidecarHandler(BaseHTTPRequestHandler):
                 import subprocess
                 import urllib.parse
                 encoded_id = urllib.parse.quote(folder_id, safe='')
-                # 先查 NAS 端实际路径
-                nas_folder = nas_api("GET", f"/rest/config/folders/{encoded_id}")
-                nas_path = None
-                if nas_folder and nas_folder.get("path"):
-                    nas_path = nas_folder["path"]
-                # 删除 NAS Syncthing 配置
-                nas_api("DELETE", f"/rest/config/folders/{encoded_id}")
+                if NAS_SSH_OK:
+                    # 先查 NAS 端实际路径
+                    nas_folder = nas_api("GET", f"/rest/config/folders/{encoded_id}")
+                    nas_path = None
+                    if nas_folder and nas_folder.get("path"):
+                        nas_path = nas_folder["path"]
+                    # 删除 NAS Syncthing 配置
+                    nas_api("DELETE", f"/rest/config/folders/{encoded_id}")
+                    # 仅在用户勾选时删除 NAS 端数据
+                    if delete_nas_files and nas_path and nas_path.startswith("/var/syncthing/"):
+                        print(f"[sidecar] delete-folder: removing NAS files at {nas_path}")
+                        rm_cmd = f'docker exec syncthing rm -rf "{nas_path}"'
+                        subprocess.run(
+                            ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", NAS_SSH, rm_cmd],
+                            capture_output=True, timeout=15
+                        )
+                    else:
+                        print(f"[sidecar] delete-folder: NAS files preserved (deleteNasFiles={delete_nas_files})")
+                else:
+                    print(f"[sidecar] delete-folder: no SSH, local-only removal")
                 # 删除本地配置
                 local_config = syncthing_api("GET", "/rest/config")
                 if local_config:
                     local_config["folders"] = [f for f in local_config.get("folders", []) if f["id"] != folder_id]
                     syncthing_api("PUT", "/rest/config", local_config)
-                # 仅在用户勾选时删除 NAS 端数据
-                if delete_nas_files and nas_path and nas_path.startswith("/var/syncthing/"):
-                    print(f"[sidecar] delete-folder: removing NAS files at {nas_path}")
-                    rm_cmd = f'docker exec syncthing rm -rf "{nas_path}"'
-                    subprocess.run(
-                        ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", NAS_SSH, rm_cmd],
-                        capture_output=True, timeout=15
-                    )
-                else:
-                    print(f"[sidecar] delete-folder: NAS files preserved (deleteNasFiles={delete_nas_files})")
                 self.send_json({"success": True})
             else:
                 self.send_json({"error": "需要 folderId"}, 400)
@@ -1052,8 +1115,7 @@ def main():
     server = ThreadingHTTPServer(("127.0.0.1", SIDECAR_PORT), SidecarHandler)
     print(f"[sidecar] 扩展服务启动: http://127.0.0.1:{SIDECAR_PORT}")
     print(f"[sidecar] Syncthing API: {SYNCTHING_API}")
-    print(f"[sidecar] 线程模式: 每请求一线程")
-    print(f"[sidecar] NAS 缓存刷新: 每 30 秒")
+    print(f"[sidecar] 模式: {'NAS SSH' if NAS_SSH else '纯本地'}（NAS_SSH={'已配置' if NAS_SSH else '未配置'}）")
     print(f"[sidecar] 文件变化检测: 每 3 秒")
     try:
         server.serve_forever()
