@@ -124,6 +124,53 @@ def refresh_nas_status_cache():
         time.sleep(30)
 
 
+# ===== NAS 文件夹自动共享给所有设备 =====
+def nas_auto_share():
+    """后台线程：每 60 秒检查 NAS 文件夹，确保每个文件夹共享给所有已知设备"""
+    if not NAS_SSH_OK:
+        return
+    time.sleep(10)  # 启动后等 10 秒再开始
+    while True:
+        try:
+            nas_folders = nas_api("GET", "/rest/config/folders")
+            nas_devices = nas_api("GET", "/rest/config/devices")
+            if not nas_folders or not nas_devices:
+                time.sleep(60)
+                continue
+
+            # NAS 自己的 ID
+            nas_self_id = ""
+            for d in nas_devices:
+                if d.get("name", "").lower().startswith("nas"):
+                    nas_self_id = d["deviceID"]
+                    break
+
+            # 收集所有非 NAS 设备 ID
+            all_device_ids = [d["deviceID"] for d in nas_devices if d["deviceID"] != nas_self_id]
+
+            # 检查每个文件夹是否共享给了所有设备
+            need_update = False
+            for f in nas_folders:
+                current_devs = set(d["deviceID"] for d in f.get("devices", []))
+                missing = [did for did in all_device_ids if did not in current_devs]
+                if missing:
+                    for did in missing:
+                        f["devices"].append({"deviceID": did, "introducedBy": ""})
+                    need_update = True
+                    print(f"[auto-share] {f['id']}: added {len(missing)} device(s)")
+
+            if need_update:
+                # PUT 更新 NAS 配置（只更新 folders 部分）
+                nas_config = nas_api("GET", "/rest/config")
+                if nas_config:
+                    nas_config["folders"] = nas_folders
+                    nas_api("PUT", "/rest/config", nas_config)
+                    print("[auto-share] NAS config updated")
+        except Exception as e:
+            print(f"[auto-share] error: {e}")
+        time.sleep(60)
+
+
 # ===== 文件变化快速检测 =====
 _folder_mtime_cache = {}  # {folder_id: last_known_max_mtime}
 
@@ -1120,6 +1167,10 @@ def main():
     # 启动文件变化快速检测线程
     watcher_thread = threading.Thread(target=file_change_watcher, daemon=True)
     watcher_thread.start()
+
+    # 启动 NAS 文件夹自动共享线程（确保新文件夹共享给所有设备）
+    share_thread = threading.Thread(target=nas_auto_share, daemon=True)
+    share_thread.start()
 
     server = ThreadingHTTPServer(("127.0.0.1", SIDECAR_PORT), SidecarHandler)
     print(f"[sidecar] 扩展服务启动: http://127.0.0.1:{SIDECAR_PORT}")
