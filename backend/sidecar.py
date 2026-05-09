@@ -127,9 +127,16 @@ def refresh_nas_status_cache():
 # ===== NAS 文件夹自动共享给所有设备 =====
 def nas_auto_share():
     """后台线程：每 60 秒检查 NAS 文件夹，确保每个文件夹共享给所有已知设备"""
+    # 等待 NAS SSH 检测完成（最多 30 秒）
+    for _ in range(30):
+        if NAS_SSH_OK:
+            break
+        time.sleep(1)
     if not NAS_SSH_OK:
+        print("[auto-share] NAS SSH not available, thread exiting")
         return
-    time.sleep(10)  # 启动后等 10 秒再开始
+    time.sleep(5)
+    print("[auto-share] thread started, checking every 60s")
     while True:
         try:
             nas_folders = nas_api("GET", "/rest/config/folders")
@@ -138,15 +145,8 @@ def nas_auto_share():
                 time.sleep(60)
                 continue
 
-            # NAS 自己的 ID
-            nas_self_id = ""
-            for d in nas_devices:
-                if d.get("name", "").lower().startswith("nas"):
-                    nas_self_id = d["deviceID"]
-                    break
-
-            # 收集所有非 NAS 设备 ID
-            all_device_ids = [d["deviceID"] for d in nas_devices if d["deviceID"] != nas_self_id]
+            # NAS 的 /rest/config/devices 不包含自己，全是远端设备
+            all_device_ids = [d["deviceID"] for d in nas_devices]
 
             # 检查每个文件夹是否共享给了所有设备
             need_update = False
