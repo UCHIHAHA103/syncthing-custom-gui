@@ -620,7 +620,13 @@ const app = {
   // ===== 文件夹选择 =====
 
   async selectFolder(id) {
-    const folder = this.folders.find(f => f.id === id);
+    // 从 config folders 或 nasFolders 中查找
+    let folder = this.folders.find(f => f.id === id);
+    if (!folder) {
+      // 尝试从 nasFolders（含 pending）中找
+      const nf = (this.nasFolders || []).find(f => f.id === id);
+      if (nf) folder = { id: nf.id, label: nf.label, path: nf.localPath || '', paused: nf.paused, type: nf.type || 'sendreceive' };
+    }
     if (!folder) return;
     this.selectedFolder = folder;
 

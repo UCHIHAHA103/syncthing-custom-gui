@@ -703,6 +703,13 @@ class SidecarHandler(BaseHTTPRequestHandler):
                 for fid, lf in local_ids.items():
                     lp = lf.get("path", "")
                     local_exists = os.path.isdir(lp) if lp else False
+                    # 查 db/status 获取文件统计（即使 paused 也能返回）
+                    gf, gb = 0, 0
+                    import urllib.parse as _up
+                    st = syncthing_api("GET", f"/rest/db/status?folder={_up.quote(fid, safe='')}")
+                    if st:
+                        gf = st.get("globalFiles", 0)
+                        gb = st.get("globalBytes", 0)
                     result.append({
                         "id": fid,
                         "label": lf.get("label", "") or fid,
@@ -712,6 +719,8 @@ class SidecarHandler(BaseHTTPRequestHandler):
                         "paused": lf.get("paused", False),
                         "type": lf.get("type", "sendreceive"),
                         "localMissing": bool(lp and not local_exists),
+                        "globalFiles": gf,
+                        "globalBytes": gb,
                     })
                 # 获取远端设备提议但还没接受的文件夹
                 pending = syncthing_api("GET", "/rest/cluster/pending/folders")
