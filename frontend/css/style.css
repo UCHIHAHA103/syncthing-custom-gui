@@ -189,8 +189,11 @@ body {
 .folder-badge.unsynced { background: var(--surface-3); color: var(--text-dim); }
 .btn-sync {
   background: var(--accent) !important; color: #fff !important;
-  font-size: 10px !important; padding: 0 8px !important;
+  font-size: 10px !important; padding: 0 10px !important;
   border-radius: var(--radius-sm) !important;
+  height: 26px !important; min-width: 40px;
+  white-space: nowrap;
+}
 }
 
 .folder-drag {
@@ -232,8 +235,8 @@ body {
 .folder-badge.idle { background: var(--accent-dim); color: var(--accent); }
 .folder-badge.error { background: rgba(239,68,68,.15); color: #ef4444; }
 
-.folder-actions { display: flex; gap: 2px; flex-shrink: 0; }
-.folder-actions .btn-sm { width: 26px; height: 26px; padding: 0; font-size: 11px; }
+.folder-actions { display: flex; gap: 2px; flex-shrink: 0; align-items: center; }
+.folder-actions .btn-sm:not(.btn-sync) { width: 26px; height: 26px; padding: 0; font-size: 11px; }
 
 /* 目录浏览器 */
 .dir-list { background: var(--surface-1); }
