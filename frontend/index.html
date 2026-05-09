@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Syncthing</title>
+<link rel="stylesheet" href="css/style.css?v=20260510-0051">
+</head>
+<body>
+<div id="app">
+
+  <!-- 标题栏 -->
+  <header class="titlebar">
+    <div class="titlebar-logo">S</div>
+    <div class="titlebar-title">Syncthing</div>
+    <nav class="titlebar-nav">
+      <button class="active" data-view="folders">文件夹</button>
+      <button data-view="devices">设备</button>
+      <button data-view="log">日志</button>
+    </nav>
+    <div class="titlebar-spacer"></div>
+    <div class="titlebar-actions">
+      <button class="btn-sm" onclick="app.rescanAll()" title="重新扫描全部">刷新</button>
+      <button class="btn-sm" onclick="app.showSettings()" title="设置">设置</button>
+    </div>
+  </header>
+
+  <!-- 主体 -->
+  <div class="main">
+
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <div class="status-row">
+          <span class="status-dot" id="statusDot"></span>
+          <span class="status-text" id="statusText">连接中...</span>
+          <span class="status-version" id="statusVersion"></span>
+        </div>
+        <div class="status-row speed-row">
+          <span id="speedText">--</span>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-label">设备</div>
+        <div class="device-list" id="deviceList"></div>
+      </div>
+
+      <div class="sidebar-footer">
+        <button class="sidebar-btn" onclick="app.toggleGlobalPause()">全局暂停</button>
+        <button class="sidebar-btn" onclick="app.restart()">重启 Syncthing</button>
+      </div>
+    </aside>
+
+    <!-- 内容区 -->
+    <main class="content">
+      <!-- 告警 -->
+      <div class="alert-bar" id="alertBar" style="display:none">
+        <span id="alertText"></span>
+        <button class="alert-action" onclick="app.resolveConflicts()">解决</button>
+        <button class="alert-dismiss" onclick="app.dismissAlert()">x</button>
+      </div>
+
+      <!-- 工具栏 -->
+      <div class="toolbar">
+        <span class="toolbar-title">同步文件夹</span>
+        <span class="toolbar-count" id="folderCount">0</span>
+        <span class="toolbar-spacer"></span>
+        <button class="toolbar-btn primary" onclick="app.showAddFolder()">+ 添加</button>
+      </div>
+
+      <!-- 文件夹列表 -->
+      <div class="folder-list" id="folderList"></div>
+
+      <!-- 拖拽添加区 -->
+      <div class="drop-zone" id="dropZone">
+        <div class="drop-text">拖拽文件夹到此处添加同步</div>
+        <div class="drop-hint">自动创建 .stfolder 标记并生成文件夹 ID</div>
+      </div>
+    </main>
+
+    <!-- 右侧面板 -->
+    <aside class="right-panel">
+      <div class="panel-header">
+        <span>当前选中：</span>
+        <span class="panel-folder-name" id="panelFolderName">--</span>
+      </div>
+      <div class="panel-tabs">
+        <button class="panel-tab active" data-tab="ignore">忽略规则</button>
+        <button class="panel-tab" data-tab="detail">详情</button>
+        <button class="panel-tab" data-tab="note">备注</button>
+      </div>
+      <div class="panel-content">
+        <!-- 忽略规则 Tab -->
+        <div class="tab-pane active" id="tabIgnore">
+          <div class="section">
+            <div class="section-title">全局忽略 <span class="tag">所有文件夹</span></div>
+            <div class="ignore-block" id="globalIgnoreBlock"></div>
+          </div>
+          <div class="section">
+            <div class="section-title">文件夹忽略 <span class="tag" id="folderIgnoreTag">.stignore</span></div>
+            <div class="ignore-block" id="folderIgnoreBlock"></div>
+          </div>
+        </div>
+        <!-- 详情 Tab -->
+        <div class="tab-pane" id="tabDetail">
+          <div class="section" id="detailContent"></div>
+        </div>
+        <!-- 备注 Tab -->
+        <div class="tab-pane" id="tabNote">
+          <div class="section">
+            <textarea class="note-area" id="noteArea" placeholder="为此文件夹添加备注..."></textarea>
+            <div class="note-hint">保存在 .stfolder/syncthing-folder-*.txt</div>
+            <button class="toolbar-btn" style="margin-top:8px" onclick="app.saveNote()">保存备注</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- 底部 -->
+  <footer class="statusbar">
+    <span><span class="statusbar-dot" id="footerDot"></span><span id="footerStatus">--</span></span>
+    <span id="footerDevices">--</span>
+    <span id="footerFolders">--</span>
+    <span class="statusbar-spacer"></span>
+    <span id="footerSpeed">--</span>
+  </footer>
+</div>
+
+<!-- 文件夹设置弹窗 -->
+<div class="modal-overlay" id="folderSettingsModal" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modalTitle">文件夹设置</div>
+      <button class="modal-close" onclick="app.closeModal('folderSettingsModal')">x</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-footer" id="modalFooter"></div>
+  </div>
+</div>
+
+<script src="js/api.js?v=20260510-0141"></script>
+<script src="js/app.js?v=20260510-0141"></script>
+</body>
+</html>
