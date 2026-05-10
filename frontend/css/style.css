@@ -380,14 +380,14 @@ body {
 .ignore-drop-zone {
   border: 1.5px dashed var(--border);
   border-radius: var(--radius);
-  padding: 12px; text-align: center;
+  padding: 14px; text-align: center;
   margin-top: 8px; transition: all 0.2s;
 }
-.ignore-drop-zone span { font-size: 11px; color: var(--text-dim); }
+.ignore-drop-zone .drop-text { font-size: 11px; color: var(--text-dim); }
 .ignore-drop-zone.active {
   border-color: var(--accent); background: var(--accent-dim);
 }
-.ignore-drop-zone.active span { color: var(--accent); }
+.ignore-drop-zone.active .drop-text { color: var(--accent); }
 
 /* 备注 */
 .note-area {

@@ -959,12 +959,13 @@ const app = {
           const path = subpath ? `${subpath}${item.name}` : item.name;
           const displayName = item.name.replace(/\/$/, '');
           const drillDown = item.isDir ? `onclick="app.showIgnoreBrowser('${path.replace(/'/g, "\\'")}')"` : '';
-          return `<div class="ignore-browser-item">
-            <span ${drillDown} class="ignore-browser-name">
-              <span>${icon}</span>
-              <span class="ignore-browser-label">${displayName}</span>
+          return `<div style="display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:11px;cursor:pointer;border-bottom:1px solid var(--surface-2)">
+            <span ${drillDown} style="flex:1;display:flex;align-items:center;gap:4px;overflow:hidden;min-width:0">
+              <span style="flex-shrink:0">${icon}</span>
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px">${displayName}</span>
             </span>
-            <span class="ignore-browser-add" onclick="event.stopPropagation();app.addIgnoreFromBrowser('${path.replace(/'/g, "\\'")}')">+</span>
+            <span style="flex-shrink:0;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-size:14px;font-weight:bold;color:var(--green);cursor:pointer"
+                  onclick="event.stopPropagation();app.addIgnoreFromBrowser('${path.replace(/'/g, "\\'")}')">+</span>
           </div>`;
         }).join('');
         if (items.length > 100) {
