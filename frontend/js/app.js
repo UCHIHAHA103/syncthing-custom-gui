@@ -881,21 +881,38 @@ const app = {
 
     let newRules = [];
     if (enabled) {
-      // 黑名单 → 白名单：当前黑名单规则清除，创建空白名单
-      // 保留现有规则作为注释备份
+      // 黑名单 → 白名单：备份当前黑名单规则，恢复已保存的白名单规则
       for (const r of currentRules) {
-        if (r !== '*') newRules.push(`//[black] ${r}`);
+        const t = r.trim();
+        if (t.startsWith('//[white] ')) {
+          // 恢复之前备份的白名单规则
+          newRules.push(t.slice('//[white] '.length));
+        } else if (t.startsWith('//[black] ')) {
+          // 已备份的黑名单，保留
+          newRules.push(r);
+        } else if (t === '*') {
+          // 跳过
+        } else {
+          // 活跃的黑名单规则 → 备份
+          newRules.push(`//[black] ${r}`);
+        }
       }
       newRules.push('*');
     } else {
-      // 白名单 → 黑名单：恢复之前备份的黑名单规则
+      // 白名单 → 黑名单：备份当前白名单规则，恢复已保存的黑名单规则
       for (const r of currentRules) {
         const t = r.trim();
         if (t.startsWith('//[black] ')) {
+          // 恢复之前备份的黑名单规则
           newRules.push(t.slice('//[black] '.length));
-        } else if (t === '*' || t.startsWith('!')) {
-          // 白名单规则备份
-          if (t.startsWith('!')) newRules.push(`//[white] ${t}`);
+        } else if (t.startsWith('//[white] ')) {
+          // 已备份的白名单，保留
+          newRules.push(r);
+        } else if (t === '*') {
+          // 跳过
+        } else if (t.startsWith('!')) {
+          // 活跃的白名单规则 → 备份
+          newRules.push(`//[white] ${t}`);
         }
       }
     }
