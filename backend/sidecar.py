@@ -710,14 +710,19 @@ def migrate_folder_path(folder_id, new_path):
 
 
 def ensure_sync_ignore(folder_path):
-    """确保文件夹下 .sync-ignore 文件存在（#include 依赖它，不存在会导致 Syncthing 报错拒绝扫描）"""
+    """确保文件夹下 .sync-ignore 文件存在（#include 依赖它，不存在会导致 Syncthing 报错）
+    创建后设极早时间戳（2000-01-01），确保远端有内容的版本一定比它新，会覆盖它。
+    """
     sync_ignore = Path(folder_path) / ".sync-ignore"
     if not sync_ignore.exists():
         try:
             sync_ignore.write_text("// 同步忽略规则 - mode: blacklist\n", encoding="utf-8")
-            print(f"[ignore-rules] Created .sync-ignore at {folder_path}")
+            # 设极早的 mtime，让远端版本覆盖这个占位文件
+            old_ts = 946684800  # 2000-01-01 00:00:00 UTC
+            os.utime(str(sync_ignore), (old_ts, old_ts))
+            print(f"[ensure-sync-ignore] Created {folder_path}/.sync-ignore (mtime=2000-01-01)")
         except Exception as e:
-            print(f"[ignore-rules] Failed to create .sync-ignore at {folder_path}: {e}")
+            print(f"[ensure-sync-ignore] Failed: {e}")
 
 
 # ===== 添加文件夹 =====
