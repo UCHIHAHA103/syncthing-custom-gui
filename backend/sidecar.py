@@ -590,13 +590,11 @@ def sync_global_ignore_to_folders():
         if not folder_path or not os.path.isdir(folder_path):
             continue
         stignore_path = Path(folder_path) / ".stignore"
-        sync_ignore_exists = (Path(folder_path) / ".sync-ignore").exists()
         stignore_lines = ["// --- GLOBAL IGNORE START ---"]
         for r in global_rules:
             stignore_lines.append(r)
         stignore_lines.append("// --- GLOBAL IGNORE END ---")
-        if sync_ignore_exists:
-            stignore_lines.append("#include .sync-ignore")
+        stignore_lines.append("#include .sync-ignore")
         if stignore_path.exists():
             existing = stignore_path.read_text(encoding="utf-8").splitlines()
             in_managed = False
@@ -1151,8 +1149,7 @@ class SidecarHandler(BaseHTTPRequestHandler):
                 path_obj = Path(local_path)
                 path_obj.mkdir(parents=True, exist_ok=True)
                 (path_obj / ".stfolder").mkdir(exist_ok=True)
-
-                # 不创建 .sync-ignore（NAS 版本会同步过来，提前创建空文件会导致不被覆盖）
+                ensure_sync_ignore(local_path)
 
                 # 立即返回成功
                 self.send_json({"success": True})
@@ -1405,17 +1402,6 @@ class SidecarHandler(BaseHTTPRequestHandler):
                             time.sleep(1)
                             st = syncthing_api("GET", f"/rest/db/status?folder={encoded_id}", timeout=5)
                             if st and st.get("needFiles", 1) == 0 and st.get("state") == "idle":
-                                # 同步完成，.sync-ignore 应该已从 NAS 到达
-                                # 确保 .stignore 有 #include .sync-ignore
-                                folder_path = folder_cfg.get("path", "")
-                                if folder_path and (Path(folder_path) / ".sync-ignore").exists():
-                                    ig = syncthing_api("GET", f"/rest/db/ignores?folder={encoded_id}")
-                                    if ig:
-                                        cur = ig.get("ignore", []) or []
-                                        if "#include .sync-ignore" not in cur:
-                                            cur.append("#include .sync-ignore")
-                                            syncthing_api("POST", f"/rest/db/ignores?folder={encoded_id}", {"ignore": cur})
-                                            print(f"[auto-upgrade] {folder_id}: added #include to .stignore")
                                 syncthing_api("PATCH", f"/rest/config/folders/{encoded_id}", {"type": "sendreceive"})
                                 print(f"[auto-upgrade] {folder_id}: sync complete, upgraded to sendreceive")
                                 return
@@ -1501,17 +1487,17 @@ class SidecarHandler(BaseHTTPRequestHandler):
             path_obj.mkdir(parents=True, exist_ok=True)
             # 创建 .stfolder
             (path_obj / ".stfolder").mkdir(exist_ok=True)
-            # 创建 .stignore（全局规则，不加 #include .sync-ignore）
-            # receiveonly 模式下不需要忽略规则（全量接收）
-            # .sync-ignore 会从 NAS 同步过来，到达后 pause-folder 的 auto-upgrade 会补 #include
+            # 创建 .stignore（含全局规则 + #include .sync-ignore）
             stignore = path_obj / ".stignore"
             if not stignore.exists():
                 global_rules = get_global_ignore()
                 lines = ["// --- GLOBAL IGNORE START ---"]
                 lines.extend(global_rules)
                 lines.append("// --- GLOBAL IGNORE END ---")
+                lines.append("#include .sync-ignore")
                 stignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
-                print(f"[sync-to-local] Created .stignore without #include")
+            # 创建空 .sync-ignore（#include 依赖它，NAS 版本会通过 Syncthing 覆盖）
+            ensure_sync_ignore(local_path)
             # 获取 NAS 端文件夹信息
             import urllib.parse
             encoded_id = urllib.parse.quote(folder_id, safe='')
