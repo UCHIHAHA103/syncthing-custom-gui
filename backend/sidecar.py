@@ -594,7 +594,8 @@ def sync_global_ignore_to_folders():
         for r in global_rules:
             stignore_lines.append(r)
         stignore_lines.append("// --- GLOBAL IGNORE END ---")
-        stignore_lines.append("#include .sync-ignore")
+        if (Path(folder_path) / ".sync-ignore").exists():
+            stignore_lines.append("#include .sync-ignore")
         if stignore_path.exists():
             existing = stignore_path.read_text(encoding="utf-8").splitlines()
             in_managed = False
@@ -709,20 +710,23 @@ def migrate_folder_path(folder_id, new_path):
     return {"success": True, "steps": steps}
 
 
-def ensure_sync_ignore(folder_path):
-    """确保文件夹下 .sync-ignore 文件存在（#include 依赖它，不存在会导致 Syncthing 报错）
-    创建后设极早时间戳（2000-01-01），确保远端有内容的版本一定比它新，会覆盖它。
-    """
+def ensure_sync_ignore_include(folder_path, folder_id):
+    """当 .sync-ignore 存在时，确保 .stignore 有 #include .sync-ignore"""
     sync_ignore = Path(folder_path) / ".sync-ignore"
     if not sync_ignore.exists():
-        try:
-            sync_ignore.write_text("// 同步忽略规则 - mode: blacklist\n", encoding="utf-8")
-            # 设极早的 mtime，让远端版本覆盖这个占位文件
-            old_ts = 946684800  # 2000-01-01 00:00:00 UTC
-            os.utime(str(sync_ignore), (old_ts, old_ts))
-            print(f"[ensure-sync-ignore] Created {folder_path}/.sync-ignore (mtime=2000-01-01)")
-        except Exception as e:
-            print(f"[ensure-sync-ignore] Failed: {e}")
+        return False
+    import urllib.parse
+    encoded_id = urllib.parse.quote(folder_id, safe='')
+    ignores_data = syncthing_api("GET", f"/rest/db/ignores?folder={encoded_id}")
+    if not ignores_data:
+        return False
+    current_ignores = ignores_data.get("ignore", []) or []
+    if "#include .sync-ignore" in current_ignores:
+        return True
+    current_ignores.append("#include .sync-ignore")
+    syncthing_api("POST", f"/rest/db/ignores?folder={encoded_id}", {"ignore": current_ignores})
+    print(f"[ensure-include] Added #include to {folder_id}/.stignore")
+    return True
 
 
 # ===== 添加文件夹 =====
@@ -760,8 +764,10 @@ def add_folder(path, label=None, paused=True):
         stignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
         print(f"[add-folder] Created .stignore with #include .sync-ignore")
 
-    # 确保 .sync-ignore 存在（#include 依赖它）
-    ensure_sync_ignore(str(path_obj))
+    # 创建 .sync-ignore（本地新建，没有远端版本，需要直接创建）
+    sync_ignore = path_obj / ".sync-ignore"
+    if not sync_ignore.exists():
+        sync_ignore.write_text("// 同步忽略规则 - mode: blacklist\n", encoding="utf-8")
 
     # 生成文件夹 ID（保留原始大小写）
     folder_id = path_obj.name.replace(" ", "-")[:32]
@@ -1154,7 +1160,6 @@ class SidecarHandler(BaseHTTPRequestHandler):
                 path_obj = Path(local_path)
                 path_obj.mkdir(parents=True, exist_ok=True)
                 (path_obj / ".stfolder").mkdir(exist_ok=True)
-                ensure_sync_ignore(local_path)
 
                 # 立即返回成功
                 self.send_json({"success": True})
@@ -1337,18 +1342,11 @@ class SidecarHandler(BaseHTTPRequestHandler):
             sync_ignore_path.write_text(content, encoding="utf-8")
 
             # 确保 .stignore 有 #include .sync-ignore（首次编辑时可能还没有）
-            import urllib.parse
-            encoded_id = urllib.parse.quote(folder_id, safe='')
-            ignores_data = syncthing_api("GET", f"/rest/db/ignores?folder={encoded_id}")
-            if ignores_data:
-                current_ignores = ignores_data.get("ignore", []) or []
-                if "#include .sync-ignore" not in current_ignores:
-                    current_ignores.append("#include .sync-ignore")
-                    syncthing_api("POST", f"/rest/db/ignores?folder={encoded_id}",
-                                  {"ignore": current_ignores})
-                    print(f"[edit-sync-ignore] Added #include to {folder_id}/.stignore")
+            ensure_sync_ignore_include(folder_path, folder_id)
 
             # 通知 Syncthing 重新扫描忽略规则
+            import urllib.parse
+            encoded_id = urllib.parse.quote(folder_id, safe='')
             syncthing_api("POST", f"/rest/db/scan?folder={encoded_id}")
 
             self.send_json({"success": True})
@@ -1407,6 +1405,8 @@ class SidecarHandler(BaseHTTPRequestHandler):
                             time.sleep(1)
                             st = syncthing_api("GET", f"/rest/db/status?folder={encoded_id}", timeout=5)
                             if st and st.get("needFiles", 1) == 0 and st.get("state") == "idle":
+                                # .sync-ignore 应该已从 NAS 到达，补上 #include
+                                ensure_sync_ignore_include(folder_cfg.get("path", ""), folder_id)
                                 syncthing_api("PATCH", f"/rest/config/folders/{encoded_id}", {"type": "sendreceive"})
                                 print(f"[auto-upgrade] {folder_id}: sync complete, upgraded to sendreceive")
                                 return
@@ -1492,17 +1492,15 @@ class SidecarHandler(BaseHTTPRequestHandler):
             path_obj.mkdir(parents=True, exist_ok=True)
             # 创建 .stfolder
             (path_obj / ".stfolder").mkdir(exist_ok=True)
-            # 创建 .stignore（含全局规则 + #include .sync-ignore）
+            # 创建 .stignore（全局规则，不加 #include）
+            # .sync-ignore 会从 NAS 同步过来，到达后 auto-upgrade 补 #include
             stignore = path_obj / ".stignore"
             if not stignore.exists():
                 global_rules = get_global_ignore()
                 lines = ["// --- GLOBAL IGNORE START ---"]
                 lines.extend(global_rules)
                 lines.append("// --- GLOBAL IGNORE END ---")
-                lines.append("#include .sync-ignore")
                 stignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            # 创建空 .sync-ignore（#include 依赖它，NAS 版本会通过 Syncthing 覆盖）
-            ensure_sync_ignore(local_path)
             # 获取 NAS 端文件夹信息
             import urllib.parse
             encoded_id = urllib.parse.quote(folder_id, safe='')
