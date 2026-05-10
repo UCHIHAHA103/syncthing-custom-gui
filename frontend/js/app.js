@@ -127,33 +127,29 @@ const app = {
 
     // 忽略列表拖拽
     const idz = document.getElementById('ignoreDropZone');
-    ['dragenter', 'dragover'].forEach(e => idz.addEventListener(e, ev => { ev.preventDefault(); ev.stopPropagation(); idz.classList.add('active'); }));
-    ['dragleave', 'drop'].forEach(e => idz.addEventListener(e, ev => {
-      ev.preventDefault(); ev.stopPropagation(); idz.classList.remove('active');
-      if (e === 'drop') {
-        const items = ev.dataTransfer.items || [];
-        const files = ev.dataTransfer.files || [];
-        for (let i = 0; i < (items.length || files.length); i++) {
-          let name = '';
-          if (items[i]?.webkitGetAsEntry) {
-            const entry = items[i].webkitGetAsEntry();
-            name = entry ? entry.name : '';
-          } else if (files[i]) {
-            name = files[i].name;
-          }
-          if (name) {
-            // 获取文件夹路径：如果选中了文件夹，先检查是否有选中的同步文件夹
-            const folder = this.selectedFolder;
-            if (folder) {
-              // 用相对路径添加到忽略/白名单
-              const path = name.replace(/^\//, '');
-              console.log(`[ignoreDrop] adding: ${path}, whitelist: ${this._folderWhitelistMode}`);
-              this.addIgnoreFromBrowser(path);
-            }
-          }
+    let idzCounter = 0;
+    idz.addEventListener('dragenter', ev => { ev.preventDefault(); ev.stopPropagation(); idzCounter++; idz.classList.add('active'); });
+    idz.addEventListener('dragover', ev => { ev.preventDefault(); ev.stopPropagation(); });
+    idz.addEventListener('dragleave', ev => { ev.preventDefault(); ev.stopPropagation(); idzCounter--; if (idzCounter <= 0) { idzCounter = 0; idz.classList.remove('active'); } });
+    idz.addEventListener('drop', ev => {
+      ev.preventDefault(); ev.stopPropagation(); idzCounter = 0; idz.classList.remove('active');
+      const items = ev.dataTransfer.items || [];
+      const files = ev.dataTransfer.files || [];
+      for (let i = 0; i < (items.length || files.length); i++) {
+        let name = '';
+        if (items[i]?.webkitGetAsEntry) {
+          const entry = items[i].webkitGetAsEntry();
+          name = entry ? entry.name : '';
+        } else if (files[i]) {
+          name = files[i].name;
+        }
+        if (name && this.selectedFolder) {
+          const path = name.replace(/^\//, '');
+          console.log(`[ignoreDrop] adding: ${path}, whitelist: ${this._folderWhitelistMode}`);
+          this.addIgnoreFromBrowser(path);
         }
       }
-    }));
+    });
   },
 
   async refresh() {
@@ -918,6 +914,11 @@ const app = {
     const fid = this.selectedFolder.id;
     const browser = document.getElementById('ignoreBrowser');
     if (!browser) return;
+    // 无 subpath 时 toggle（点击📂按钮）；有 subpath 时始终展开（drill down）
+    if (!subpath && browser.style.display === 'block' && browser.innerHTML) {
+      browser.style.display = 'none';
+      return;
+    }
     browser.style.display = 'block';
     browser.innerHTML = '<div style="color:var(--text-dim);font-size:11px;padding:6px">加载中...</div>';
     try {
