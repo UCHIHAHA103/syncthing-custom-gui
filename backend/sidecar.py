@@ -1092,6 +1092,25 @@ class SidecarHandler(BaseHTTPRequestHandler):
             # 目录浏览：返回指定路径下的子目录列表
             params = parse_qs(parsed.query)
             browse_path = params.get("path", [""])[0]
+
+        elif path == "/api/list-dir":
+            # 列出目录下的所有文件和子目录（忽略规则浏览器用）
+            params = parse_qs(parsed.query)
+            dir_path = params.get("path", [""])[0]
+            if dir_path and os.path.isdir(dir_path):
+                try:
+                    p = Path(dir_path)
+                    items = []
+                    for entry in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+                        if entry.name.startswith('.'):
+                            continue
+                        items.append({"name": entry.name, "isDir": entry.is_dir()})
+                    self.send_json({"items": items[:200]})
+                except Exception as e:
+                    self.send_json({"error": str(e)}, 400)
+            else:
+                self.send_json({"error": "路径不存在"}, 400)
+            return
             if not browse_path or not os.path.isabs(browse_path):
                 # 返回驱动器列表（Windows）
                 import string

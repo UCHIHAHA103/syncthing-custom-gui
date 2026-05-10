@@ -973,27 +973,32 @@ const app = {
     browser.style.display = 'block';
     browser.innerHTML = '<div style="color:var(--text-dim);font-size:11px;padding:6px">加载中...</div>';
     try {
-      const prefix = subpath ? `&prefix=${encodeURIComponent(subpath)}` : '';
-      const data = await API.stFetch(`/rest/db/browse?folder=${encodeURIComponent(fid)}&levels=1${prefix}`);
-      // data is array of objects: [{name, type: "FILE_INFO_TYPE_FILE"|"FILE_INFO_TYPE_DIRECTORY", ...}]
-      // or for levels=1: nested object {name: [children]} or flat array
       let items = [];
-      if (Array.isArray(data)) {
-        for (const entry of data) {
-          if (typeof entry === 'string') {
-            items.push({ name: entry, isDir: entry.endsWith('/') });
-          } else if (entry.name) {
-            items.push({ name: entry.name, isDir: entry.type === 'FILE_INFO_TYPE_DIRECTORY' || entry.name.endsWith('/') });
-          } else {
-            // {dirName: [...]} format
-            for (const [key, val] of Object.entries(entry)) {
-              items.push({ name: key, isDir: Array.isArray(val) });
+      const folderPath = this.selectedFolder.path;
+      try {
+        // 尝试 Syncthing db/browse API（文件夹必须未暂停）
+        const prefix = subpath ? `&prefix=${encodeURIComponent(subpath)}` : '';
+        const data = await API.stFetch(`/rest/db/browse?folder=${encodeURIComponent(fid)}&levels=1${prefix}`);
+        items = this._parseBrowseData(data);
+        items = this._parseBrowseData(data);
+      } catch (e) {
+        // Fallback：通过 sidecar 浏览本地文件系统
+        if (folderPath) {
+          const browsePath = subpath ? `${folderPath}\\${subpath.replace(/\//g, '\\\\')}` : folderPath;
+          const fsData = await API.browseDir(browsePath);
+          const dirs = fsData.dirs || [];
+          items = dirs.map(name => ({ name: name.endsWith('/') ? name : name, isDir: true }));
+          // 也获取文件（browseDir 只返回目录，需要新增文件列表）
+          try {
+            const filesData = await API.sideFetch(`/api/list-dir?path=${encodeURIComponent(browsePath)}`);
+            if (filesData && filesData.items) {
+              items = filesData.items.map(f => ({ name: f.name, isDir: f.isDir }));
             }
+          } catch (e2) {
+            // 只用目录列表
           }
-        }
-      } else if (typeof data === 'object') {
-        for (const [key, val] of Object.entries(data)) {
-          items.push({ name: key, isDir: Array.isArray(val) || (typeof val === 'object' && val !== null) });
+        } else {
+          throw e;
         }
       }
       // 排序：目录在前
@@ -1029,6 +1034,28 @@ const app = {
       console.error('[showIgnoreBrowser] error:', e);
       browser.innerHTML = `<div style="color:var(--red);font-size:11px;padding:6px">加载失败: ${e.message}</div>`;
     }
+  },
+
+  _parseBrowseData(data) {
+    const items = [];
+    if (Array.isArray(data)) {
+      for (const entry of data) {
+        if (typeof entry === 'string') {
+          items.push({ name: entry, isDir: entry.endsWith('/') });
+        } else if (entry.name) {
+          items.push({ name: entry.name, isDir: entry.type === 'FILE_INFO_TYPE_DIRECTORY' || entry.name.endsWith('/') });
+        } else {
+          for (const [key, val] of Object.entries(entry)) {
+            items.push({ name: key, isDir: Array.isArray(val) });
+          }
+        }
+      }
+    } else if (typeof data === 'object' && data) {
+      for (const [key, val] of Object.entries(data)) {
+        items.push({ name: key, isDir: Array.isArray(val) || (typeof val === 'object' && val !== null) });
+      }
+    }
+    return items;
   },
 
   async addIgnoreFromBrowser(path) {
