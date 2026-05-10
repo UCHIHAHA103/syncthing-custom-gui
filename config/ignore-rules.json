@@ -8,5 +8,37 @@
     "**/Thumbs.db",
     "**/$RECYCLE.BIN"
   ],
-  "folders": {}
+  "folders": {
+    "测试忽略列表": {
+      "mode": "whitelist",
+      "rules": [
+        "001.jpg",
+        "002.jpg",
+        "003.jpg"
+      ]
+    },
+    "测试忽略列表黑名单": {
+      "mode": "blacklist",
+      "rules": [
+        "/020.jpg",
+        "/019.jpg"
+      ]
+    },
+    "漫画基础教程-表情绘画技法": {
+      "mode": "blacklist",
+      "rules": []
+    },
+    "测试忽略列表黑名单2": {
+      "mode": "blacklist",
+      "rules": []
+    },
+    "测试忽略列表黑名单3": {
+      "mode": "blacklist",
+      "rules": [
+        "/010.jpg",
+        "/011.jpg",
+        "/012.jpg"
+      ]
+    }
+  }
 }

@@ -690,19 +690,25 @@ def apply_ignore_rules_to_folders():
         if fr:
             mode = fr.get("mode", "blacklist")
             rules = fr.get("rules", [])
-            sync_lines = []
-            sync_lines.append(f"// 同步忽略规则 - mode: {mode}")
-            if mode == "whitelist":
-                for r in rules:
-                    sync_lines.append(f"!/{r}" if not r.startswith("!") else r)
-                sync_lines.append("*")
+            # 过滤掉脏数据（#include 不应该出现在规则中）
+            rules = [r for r in rules if not r.strip().startswith("#include")]
+            if not rules and mode == "blacklist":
+                # 规则为空的黑名单，不覆盖现有 .sync-ignore（可能有用户手动添加的规则）
+                pass
             else:
-                for r in rules:
-                    sync_lines.append(r)
-            try:
-                sync_ignore_path.write_text("\n".join(sync_lines) + "\n", encoding="utf-8")
-            except Exception as e:
-                print(f"[ignore-rules] Failed to write {fid}/.sync-ignore: {e}")
+                sync_lines = []
+                sync_lines.append(f"// 同步忽略规则 - mode: {mode}")
+                if mode == "whitelist":
+                    for r in rules:
+                        sync_lines.append(f"!/{r}" if not r.startswith("!") else r)
+                    sync_lines.append("*")
+                else:
+                    for r in rules:
+                        sync_lines.append(r)
+                try:
+                    sync_ignore_path.write_text("\n".join(sync_lines) + "\n", encoding="utf-8")
+                except Exception as e:
+                    print(f"[ignore-rules] Failed to write {fid}/.sync-ignore: {e}")
         elif sync_ignore_path.exists():
             # JSON 里没有规则但文件存在 → 不删除（可能是其他设备同步过来的）
             pass

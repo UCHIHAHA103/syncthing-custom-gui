@@ -816,21 +816,42 @@ const app = {
   },
 
   async saveFolderRulesToJson(folderId) {
-    // 从当前 .stignore 读取规则，保存到集中式 JSON
+    // 从 .sync-ignore 文件直接读取规则，保存到集中式 JSON
+    // 不从 Syncthing API 读（API 返回展开后的合并规则，容易混入脏数据）
     try {
-      const data = await API.getIgnores(folderId);
-      const ignores = data.ignore || [];
-      // 提取用户规则（过滤掉全局段和文件夹规则段）
-      let inManaged = false;
-      const userRules = [];
-      for (const line of ignores) {
-        if (line.includes('GLOBAL IGNORE START') || line.includes('FOLDER RULES START')) { inManaged = true; continue; }
-        if (line.includes('GLOBAL IGNORE END') || line.includes('FOLDER RULES END')) { inManaged = false; continue; }
-        if (inManaged) continue;
-        const t = line.trim();
-        if (!t || t.startsWith('//')) continue;
-        userRules.push(t);
+      const folder = this.folders.find(f => f.id === folderId) || this.selectedFolder;
+      const folderPath = folder?.path;
+      let userRules = [];
+
+      if (folderPath && this.sidecarOk) {
+        const sep = folderPath.includes('/') ? '/' : '\\';
+        const syncIgnorePath = `${folderPath}${sep}.sync-ignore`;
+        const resp = await API.sideFetch(`/api/read-file?path=${encodeURIComponent(syncIgnorePath)}`);
+        if (resp && resp.content !== undefined) {
+          const lines = resp.content.split('\n');
+          for (const line of lines) {
+            const t = line.trim();
+            if (!t || t.startsWith('//') || t.startsWith('#include')) continue;
+            userRules.push(t);
+          }
+        }
       }
+
+      if (userRules.length === 0) {
+        // fallback: 从 Syncthing API 读（过滤更严格）
+        const data = await API.getIgnores(folderId);
+        const ignores = data.ignore || [];
+        let inManaged = false;
+        for (const line of ignores) {
+          if (line.includes('GLOBAL IGNORE START') || line.includes('FOLDER RULES START')) { inManaged = true; continue; }
+          if (line.includes('GLOBAL IGNORE END') || line.includes('FOLDER RULES END')) { inManaged = false; continue; }
+          if (inManaged) continue;
+          const t = line.trim();
+          if (!t || t.startsWith('//') || t.startsWith('#include')) continue;
+          userRules.push(t);
+        }
+      }
+
       // 判断模式
       const lastIsStar = userRules.length > 0 && userRules[userRules.length - 1] === '*';
       const hasWhite = userRules.some(r => r.startsWith('!'));
@@ -846,7 +867,7 @@ const app = {
       if (rules.length > 0 || isWhitelist) {
         await API.sideFetch('/api/folder-ignore-rules', 'POST', { folderId, mode, rules });
       }
-      console.log(`[saveFolderRulesToJson] ${folderId}: mode=${mode}, rules=${rules.length}`);
+      console.log(`[saveFolderRulesToJson] ${folderId}: mode=${mode}, rules=${JSON.stringify(rules)}`);
     } catch (e) {
       console.error('[saveFolderRulesToJson] error:', e);
     }
@@ -862,6 +883,7 @@ const app = {
       if (this.sidecarOk) await API.setGlobalIgnore(this.globalIgnore);
       this.renderGlobalIgnore();
     } else if (this.selectedFolder) {
+      console.log(`[addIgnoreRule] folderId=${this.selectedFolder.id}, path=${this.selectedFolder.path}, rule=${rule}, whitelist=${this._folderWhitelistMode}`);
       await API.sideFetch('/api/edit-sync-ignore', 'POST', {
         folderId: this.selectedFolder.id,
         path: this.selectedFolder.path,
@@ -869,8 +891,8 @@ const app = {
         rule: rule,
         whitelist: this._folderWhitelistMode
       });
-      this.loadFolderIgnores(this.selectedFolder.id);
-      this.saveFolderRulesToJson(this.selectedFolder.id);
+      await this.loadFolderIgnores(this.selectedFolder.id);
+      await this.saveFolderRulesToJson(this.selectedFolder.id);
     }
   },
 
@@ -887,8 +909,8 @@ const app = {
         index: index,
         whitelist: this._folderWhitelistMode
       });
-      this.loadFolderIgnores(this.selectedFolder.id);
-      this.saveFolderRulesToJson(this.selectedFolder.id);
+      await this.loadFolderIgnores(this.selectedFolder.id);
+      await this.saveFolderRulesToJson(this.selectedFolder.id);
     }
   },
 
@@ -1072,6 +1094,7 @@ const app = {
 
   async addIgnoreFromBrowser(path) {
     if (!this.selectedFolder) return;
+    console.log(`[addIgnoreFromBrowser] folderId=${this.selectedFolder.id}, path=${this.selectedFolder.path}, rule=/${path}, whitelist=${this._folderWhitelistMode}`);
     await API.sideFetch('/api/edit-sync-ignore', 'POST', {
       folderId: this.selectedFolder.id,
       path: this.selectedFolder.path,
@@ -1079,10 +1102,8 @@ const app = {
       rule: `/${path}`,
       whitelist: this._folderWhitelistMode
     });
-    this.loadFolderIgnores(this.selectedFolder.id);
-    this.saveFolderRulesToJson(this.selectedFolder.id);
-    this.loadFolderIgnores(this.selectedFolder.id);
-    this.saveFolderRulesToJson(this.selectedFolder.id);
+    await this.loadFolderIgnores(this.selectedFolder.id);
+    await this.saveFolderRulesToJson(this.selectedFolder.id);
     // 刷新浏览器标记已添加
     const items = document.querySelectorAll('.ignore-browser-item');
     items.forEach(el => {
