@@ -1337,6 +1337,13 @@ class SidecarHandler(BaseHTTPRequestHandler):
 
             # 写回 .sync-ignore
             mode_str = "whitelist" if whitelist else "blacklist"
+            # 白名单模式：确保 .sync-ignore 自身不被忽略（否则无法同步到其他设备）
+            if whitelist and "!/.sync-ignore" not in rules:
+                if "*" in rules:
+                    star_idx = rules.index("*")
+                    rules.insert(star_idx, "!/.sync-ignore")
+                else:
+                    rules.append("!/.sync-ignore")
             content = f"// 同步忽略规则 - mode: {mode_str}\n"
             content += "\n".join(rules) + "\n"
             sync_ignore_path.write_text(content, encoding="utf-8")

@@ -734,6 +734,7 @@ const app = {
             for (const line of lines) {
               const t = line.trim();
               if (!t || t.startsWith('//') || t.startsWith('#include')) continue;
+              if (t === '!/.sync-ignore') continue;  // 系统规则，不显示
               filtered.push(t);
             }
           }
