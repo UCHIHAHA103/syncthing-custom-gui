@@ -727,7 +727,7 @@ const app = {
             const lines = resp.content.split('\n');
             for (const line of lines) {
               const t = line.trim();
-              if (!t || t.startsWith('//')) continue;
+              if (!t || t.startsWith('//') || t.startsWith('#include')) continue;
               filtered.push(t);
             }
           }

@@ -1413,7 +1413,7 @@ class SidecarHandler(BaseHTTPRequestHandler):
             rules = []
             if sync_ignore_path.exists():
                 lines = sync_ignore_path.read_text(encoding="utf-8").splitlines()
-                rules = [l for l in lines if l.strip() and not l.strip().startswith("//")]
+                rules = [l for l in lines if l.strip() and not l.strip().startswith("//") and not l.strip().startswith("#include")]
             else:
                 if whitelist:
                     rules = ["*"]
