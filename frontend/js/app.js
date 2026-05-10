@@ -469,7 +469,7 @@ const app = {
         <div class="folder-status ${statusClass}"></div>
         <div class="folder-info">
           <div class="folder-name">${folder.label || folder.id}</div>
-          ${pathDisplay ? `<div class="folder-path">${pathDisplay}</div>` : ''}
+          ${pathDisplay ? `<div class="folder-path" onclick="event.stopPropagation();app.openInExplorer('${pathDisplay.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')" title="点击打开文件夹">${pathDisplay}</div>` : ''}
         </div>
         <div class="folder-stats" id="stats-${folder.id}">${this._statsCache?.[folder.id] || ''}</div>
         <span class="folder-badge ${this._badgeCache?.[folder.id]?.cls || badgeClass}" id="badge-${folder.id}">${this._badgeCache?.[folder.id]?.text || badgeText}</span>
@@ -1125,6 +1125,14 @@ const app = {
     this.folders.forEach(f => { f.paused = !allPaused; });
     API.setConfig(this.config);
     this.renderFolders();
+  },
+
+  async openInExplorer(path) {
+    try {
+      await API.sideFetch('/api/open-in-explorer', 'POST', { path });
+    } catch (e) {
+      console.error('[openInExplorer] error:', e);
+    }
   },
 
   async saveNote() {

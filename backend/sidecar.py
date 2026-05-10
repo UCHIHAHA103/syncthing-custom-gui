@@ -1169,6 +1169,15 @@ class SidecarHandler(BaseHTTPRequestHandler):
             result = add_folder(body.get("path", ""), body.get("label"))
             self.send_json(result)
 
+        elif path == "/api/open-in-explorer":
+            folder_path = body.get("path", "")
+            if folder_path and os.path.exists(folder_path):
+                import subprocess
+                subprocess.Popen(["explorer", folder_path])
+                self.send_json({"success": True})
+            else:
+                self.send_json({"error": "路径不存在"}, 400)
+
         elif path == "/api/migrate-path":
             folder_id = body.get("folderId", "")
             new_path = body.get("newPath", "")
