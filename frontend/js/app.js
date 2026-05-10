@@ -780,6 +780,43 @@ const app = {
     block.innerHTML = this.renderIgnoreBlock(this.globalIgnore, 'global');
   },
 
+  async saveFolderRulesToJson(folderId) {
+    // 从当前 .stignore 读取规则，保存到集中式 JSON
+    try {
+      const data = await API.getIgnores(folderId);
+      const ignores = data.ignore || [];
+      // 提取用户规则（过滤掉全局段和文件夹规则段）
+      let inManaged = false;
+      const userRules = [];
+      for (const line of ignores) {
+        if (line.includes('GLOBAL IGNORE START') || line.includes('FOLDER RULES START')) { inManaged = true; continue; }
+        if (line.includes('GLOBAL IGNORE END') || line.includes('FOLDER RULES END')) { inManaged = false; continue; }
+        if (inManaged) continue;
+        const t = line.trim();
+        if (!t || t.startsWith('//')) continue;
+        userRules.push(t);
+      }
+      // 判断模式
+      const lastIsStar = userRules.length > 0 && userRules[userRules.length - 1] === '*';
+      const hasWhite = userRules.some(r => r.startsWith('!'));
+      const isWhitelist = lastIsStar && (hasWhite || userRules.length === 1);
+      let mode, rules;
+      if (isWhitelist) {
+        mode = 'whitelist';
+        rules = userRules.filter(r => r.startsWith('!')).map(r => r.replace(/^!\//, '').replace(/^!/, ''));
+      } else {
+        mode = 'blacklist';
+        rules = userRules.filter(r => r !== '*');
+      }
+      if (rules.length > 0 || isWhitelist) {
+        await API.sideFetch('/api/folder-ignore-rules', 'POST', { folderId, mode, rules });
+      }
+      console.log(`[saveFolderRulesToJson] ${folderId}: mode=${mode}, rules=${rules.length}`);
+    } catch (e) {
+      console.error('[saveFolderRulesToJson] error:', e);
+    }
+  },
+
   async addIgnoreRule(type, input) {
     const rule = input.value.trim();
     if (!rule) return;
@@ -807,6 +844,7 @@ const app = {
       }
       await API.setIgnores(this.selectedFolder.id, { ignore: ignores, patterns: data.patterns || [] });
       this.loadFolderIgnores(this.selectedFolder.id);
+      this.saveFolderRulesToJson(this.selectedFolder.id);
     }
   },
 
@@ -836,6 +874,7 @@ const app = {
       }
       await API.setIgnores(this.selectedFolder.id, { ignore: filtered, patterns: data.patterns || [] });
       this.loadFolderIgnores(this.selectedFolder.id);
+      this.saveFolderRulesToJson(this.selectedFolder.id);
     }
   },
 
@@ -918,6 +957,7 @@ const app = {
     await API.setIgnores(fid, { ignore: finalIgnores, patterns: data.patterns || [] });
     console.log(`[toggleWhitelistMode] ${fid}: whitelist=${enabled}, rules=${newUserRules.length}`);
     this.loadFolderIgnores(fid);
+    this.saveFolderRulesToJson(fid);
   },
 
   async showIgnoreBrowser(subpath = '') {
@@ -1013,6 +1053,7 @@ const app = {
     }
     await API.setIgnores(this.selectedFolder.id, { ignore: ignores, patterns: data.patterns || [] });
     this.loadFolderIgnores(this.selectedFolder.id);
+    this.saveFolderRulesToJson(this.selectedFolder.id);
     // 刷新浏览器标记已添加
     const items = document.querySelectorAll('.ignore-browser-item');
     items.forEach(el => {

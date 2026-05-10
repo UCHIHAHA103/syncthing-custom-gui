@@ -1,0 +1,12 @@
+{
+  "global": [
+    "**/cache",
+    "**/Cache",
+    "**/*.tmp",
+    "**/node_modules",
+    "**/.git",
+    "**/Thumbs.db",
+    "**/$RECYCLE.BIN"
+  ],
+  "folders": {}
+}

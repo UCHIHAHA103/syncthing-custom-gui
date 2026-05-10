@@ -551,73 +551,155 @@ def set_folder_order(order):
     ORDER_FILE.write_text(json.dumps(order, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-# ===== 全局忽略规则 =====
+# ===== 集中式忽略规则管理 =====
 
-# 共享全局忽略文件（通过 Syncthing 同步到所有设备）
+# 共享忽略规则 JSON（通过 git 同步到所有设备）
+IGNORE_RULES_JSON = Path(__file__).parent.parent / "config" / "ignore-rules.json"
+# 旧的共享全局忽略文件（兼容）
 SHARED_GLOBAL_IGNORE = Path(__file__).parent.parent / "config" / "global-ignore.txt"
+_ignore_rules_mtime = 0  # 上次读取的修改时间
+
+def _load_ignore_rules():
+    """读取集中式忽略规则 JSON"""
+    if IGNORE_RULES_JSON.exists():
+        try:
+            return json.loads(IGNORE_RULES_JSON.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"[ignore-rules] Failed to load JSON: {e}")
+    return {"global": [], "folders": {}}
+
+
+def _save_ignore_rules(data):
+    """写入集中式忽略规则 JSON"""
+    IGNORE_RULES_JSON.parent.mkdir(parents=True, exist_ok=True)
+    IGNORE_RULES_JSON.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
 
 def get_global_ignore():
-    # 优先读共享配置（跨设备同步）
-    if SHARED_GLOBAL_IGNORE.exists():
-        lines = SHARED_GLOBAL_IGNORE.read_text(encoding="utf-8").splitlines()
-        rules = [l for l in lines if l.strip() and not l.strip().startswith("//")]
-        if rules:
-            # 同步到本地配置
-            set_global_ignore_local(rules)
-            return rules
-    # fallback 到本地配置
-    if GLOBAL_IGNORE_FILE.exists():
-        lines = GLOBAL_IGNORE_FILE.read_text(encoding="utf-8").splitlines()
-        return [l for l in lines if l.strip() and not l.strip().startswith("//")]
-    return []
-
-
-def set_global_ignore_local(rules):
-    """只写本地配置"""
-    content = "// 全局忽略规则 - 所有同步文件夹生效\n"
-    content += "\n".join(rules) + "\n"
-    GLOBAL_IGNORE_FILE.write_text(content, encoding="utf-8")
+    data = _load_ignore_rules()
+    rules = data.get("global", [])
+    if not rules:
+        # fallback 到旧的本地/共享配置
+        if SHARED_GLOBAL_IGNORE.exists():
+            lines = SHARED_GLOBAL_IGNORE.read_text(encoding="utf-8").splitlines()
+            rules = [l for l in lines if l.strip() and not l.strip().startswith("//")]
+        elif GLOBAL_IGNORE_FILE.exists():
+            lines = GLOBAL_IGNORE_FILE.read_text(encoding="utf-8").splitlines()
+            rules = [l for l in lines if l.strip() and not l.strip().startswith("//")]
+    return rules
 
 
 def set_global_ignore(rules):
-    # 写入共享配置（同步到所有设备）
-    SHARED_GLOBAL_IGNORE.parent.mkdir(parents=True, exist_ok=True)
-    content = "// 全局忽略规则 - 所有同步文件夹生效（此文件通过 Syncthing 同步）\n"
-    content += "\n".join(rules) + "\n"
-    SHARED_GLOBAL_IGNORE.write_text(content, encoding="utf-8")
-    # 同时写本地配置
-    set_global_ignore_local(rules)
+    data = _load_ignore_rules()
+    data["global"] = rules
+    _save_ignore_rules(data)
+    # 同时写本地配置（兼容）
+    content = "// 全局忽略规则\n" + "\n".join(rules) + "\n"
+    GLOBAL_IGNORE_FILE.write_text(content, encoding="utf-8")
 
 
-def sync_global_ignore_to_folders():
-    """将全局忽略规则同步到所有文件夹的 .stignore（以 #include 方式）"""
+def get_folder_ignore_rules(folder_id):
+    """获取某个文件夹的集中管理忽略规则"""
+    data = _load_ignore_rules()
+    return data.get("folders", {}).get(folder_id, None)
+
+
+def set_folder_ignore_rules(folder_id, mode, rules):
+    """设置某个文件夹的集中管理忽略规则"""
+    data = _load_ignore_rules()
+    if "folders" not in data:
+        data["folders"] = {}
+    data["folders"][folder_id] = {"mode": mode, "rules": rules}
+    _save_ignore_rules(data)
+
+
+def remove_folder_ignore_rules(folder_id):
+    """移除某个文件夹的集中管理忽略规则"""
+    data = _load_ignore_rules()
+    if folder_id in data.get("folders", {}):
+        del data["folders"][folder_id]
+        _save_ignore_rules(data)
+
+
+def apply_ignore_rules_to_folders():
+    """将集中式忽略规则应用到所有文件夹的 .stignore"""
+    global _ignore_rules_mtime
+    if not IGNORE_RULES_JSON.exists():
+        return
+    mtime = IGNORE_RULES_JSON.stat().st_mtime
+    if mtime == _ignore_rules_mtime:
+        return  # 没变化，跳过
+    _ignore_rules_mtime = mtime
+
+    data = _load_ignore_rules()
+    global_rules = data.get("global", [])
+    folder_rules = data.get("folders", {})
+
     config = syncthing_api("GET", "/rest/config")
     if not config:
         return
-    global_rules = get_global_ignore()
+
     for folder in config.get("folders", []):
+        fid = folder.get("id", "")
         folder_path = folder.get("path", "")
         if not folder_path or not os.path.isdir(folder_path):
             continue
+
         stignore_path = Path(folder_path) / ".stignore"
-        marker_start = "// --- GLOBAL IGNORE START ---"
-        marker_end = "// --- GLOBAL IGNORE END ---"
 
+        # 构建 .stignore 内容
+        lines = []
+
+        # 1. 全局规则段
+        lines.append("// --- GLOBAL IGNORE START ---")
+        for r in global_rules:
+            lines.append(r)
+        lines.append("// --- GLOBAL IGNORE END ---")
+
+        # 2. 文件夹专属规则段（从 JSON 读取）
+        fr = folder_rules.get(fid)
+        if fr:
+            mode = fr.get("mode", "blacklist")
+            rules = fr.get("rules", [])
+            lines.append("// --- FOLDER RULES START ---")
+            if mode == "whitelist":
+                for r in rules:
+                    lines.append(f"!/{r}" if not r.startswith("!") else r)
+                lines.append("*")
+            else:
+                for r in rules:
+                    lines.append(r)
+            lines.append("// --- FOLDER RULES END ---")
+
+        # 3. 保留用户手动添加的规则（不在标记段内的）
         if stignore_path.exists():
-            content = stignore_path.read_text(encoding="utf-8")
-        else:
-            content = ""
+            existing = stignore_path.read_text(encoding="utf-8").splitlines()
+            in_managed = False
+            for line in existing:
+                if "GLOBAL IGNORE START" in line or "FOLDER RULES START" in line:
+                    in_managed = True
+                    continue
+                if "GLOBAL IGNORE END" in line or "FOLDER RULES END" in line:
+                    in_managed = False
+                    continue
+                if in_managed:
+                    continue
+                # 保留用户手动规则
+                if line.strip() and not line.strip().startswith("//[black]") and not line.strip().startswith("//[white]"):
+                    lines.append(line)
 
-        # 移除旧的全局段
-        if marker_start in content:
-            before = content.split(marker_start)[0]
-            after = content.split(marker_end)[1] if marker_end in content else ""
-            content = before.rstrip() + "\n" + after.lstrip()
+        content = "\n".join(lines) + "\n"
+        try:
+            stignore_path.write_text(content, encoding="utf-8")
+        except Exception as e:
+            print(f"[ignore-rules] Failed to write {fid}/.stignore: {e}")
 
-        # 追加新的全局段
-        global_block = f"\n{marker_start}\n" + "\n".join(global_rules) + f"\n{marker_end}\n"
-        content = content.rstrip() + "\n" + global_block
-        stignore_path.write_text(content, encoding="utf-8")
+    print(f"[ignore-rules] Applied rules to {len(config.get('folders', []))} folders")
+
+
+def sync_global_ignore_to_folders():
+    """将集中式忽略规则同步到所有文件夹的 .stignore"""
+    apply_ignore_rules_to_folders()
 
 
 # ===== 路径搜索 =====
@@ -809,6 +891,17 @@ class SidecarHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/global-ignore":
             self.send_json({"rules": get_global_ignore()})
+
+        elif path == "/api/folder-ignore-rules":
+            params = parse_qs(parsed.query)
+            folder_id = params.get("folder", [""])[0]
+            if folder_id:
+                fr = get_folder_ignore_rules(folder_id)
+                self.send_json({"rules": fr} if fr else {"rules": None})
+            else:
+                # 返回所有文件夹规则
+                data = _load_ignore_rules()
+                self.send_json({"folders": data.get("folders", {})})
 
         elif path == "/api/note":
             params = parse_qs(parsed.query)
@@ -1066,6 +1159,20 @@ class SidecarHandler(BaseHTTPRequestHandler):
             # 异步同步到各文件夹
             threading.Thread(target=sync_global_ignore_to_folders, daemon=True).start()
             self.send_json({"success": True})
+
+        elif path == "/api/folder-ignore-rules":
+            folder_id = body.get("folderId", "")
+            mode = body.get("mode", "blacklist")
+            rules = body.get("rules", [])
+            if folder_id:
+                if rules:
+                    set_folder_ignore_rules(folder_id, mode, rules)
+                else:
+                    remove_folder_ignore_rules(folder_id)
+                threading.Thread(target=apply_ignore_rules_to_folders, daemon=True).start()
+                self.send_json({"success": True})
+            else:
+                self.send_json({"error": "需要 folderId"}, 400)
 
         elif path == "/api/note":
             folder_path = body.get("path", "")
@@ -1394,6 +1501,21 @@ def main():
     # 启动传输日志监控线程
     transfer_log_thread = threading.Thread(target=transfer_event_watcher, daemon=True)
     transfer_log_thread.start()
+
+    # 启动忽略规则 JSON 监控线程（检测 git 同步带来的变更）
+    def ignore_rules_watcher():
+        time.sleep(10)
+        print("[ignore-rules] watcher started")
+        apply_ignore_rules_to_folders()  # 启动时立即应用一次
+        while True:
+            try:
+                apply_ignore_rules_to_folders()  # 内部检查 mtime，无变化时跳过
+            except Exception as e:
+                print(f"[ignore-rules] watcher error: {e}")
+            time.sleep(30)  # 每 30 秒检查一次 JSON 是否被修改
+
+    ignore_thread = threading.Thread(target=ignore_rules_watcher, daemon=True)
+    ignore_thread.start()
 
     server = ThreadingHTTPServer(("127.0.0.1", SIDECAR_PORT), SidecarHandler)
     print(f"[sidecar] 扩展服务启动: http://127.0.0.1:{SIDECAR_PORT}")
