@@ -857,6 +857,17 @@ def add_folder(path, label=None, paused=True):
     stfolder = path_obj / ".stfolder"
     stfolder.mkdir(exist_ok=True)
 
+    # 创建 .stignore（含全局规则 + #include .sync-ignore）
+    stignore = path_obj / ".stignore"
+    if not stignore.exists():
+        global_rules = get_global_ignore()
+        lines = ["// --- GLOBAL IGNORE START ---"]
+        lines.extend(global_rules)
+        lines.append("// --- GLOBAL IGNORE END ---")
+        lines.append("#include .sync-ignore")
+        stignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"[add-folder] Created .stignore with #include .sync-ignore")
+
     # 生成文件夹 ID（保留原始大小写）
     folder_id = path_obj.name.replace(" ", "-")[:32]
 
@@ -1481,6 +1492,16 @@ class SidecarHandler(BaseHTTPRequestHandler):
             path_obj.mkdir(parents=True, exist_ok=True)
             # 创建 .stfolder
             (path_obj / ".stfolder").mkdir(exist_ok=True)
+            # 创建 .stignore（含全局规则 + #include .sync-ignore）
+            stignore = path_obj / ".stignore"
+            if not stignore.exists():
+                global_rules = get_global_ignore()
+                lines = ["// --- GLOBAL IGNORE START ---"]
+                lines.extend(global_rules)
+                lines.append("// --- GLOBAL IGNORE END ---")
+                lines.append("#include .sync-ignore")
+                stignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                print(f"[sync-to-local] Created .stignore with #include .sync-ignore")
             # 获取 NAS 端文件夹信息
             import urllib.parse
             encoded_id = urllib.parse.quote(folder_id, safe='')
@@ -1598,14 +1619,13 @@ def main():
         time.sleep(10)
         print("[ignore-rules] watcher started")
         apply_ignore_rules_to_folders()  # 启动时立即应用一次
-        ensure_stignore_includes()  # 确保所有有 .sync-ignore 的文件夹都有 #include
+        ensure_stignore_includes()  # 启动时补全已有文件夹的 #include（仅一次）
         while True:
             try:
                 apply_ignore_rules_to_folders()  # 内部检查 mtime，无变化时跳过
-                ensure_stignore_includes()  # 检查新同步过来的 .sync-ignore
             except Exception as e:
                 print(f"[ignore-rules] watcher error: {e}")
-            time.sleep(30)  # 每 30 秒检查一次
+            time.sleep(30)
 
     ignore_thread = threading.Thread(target=ignore_rules_watcher, daemon=True)
     ignore_thread.start()
