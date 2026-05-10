@@ -675,16 +675,16 @@ const app = {
         }
       }
       console.log(`[loadFolderIgnores] ${id}: ${filtered.length} filtered rules`);
-      // 检测白名单模式：最后一条规则是 * 且有 ! 开头的规则
-      const isWhitelist = filtered.length > 0 && filtered[filtered.length - 1].trim() === '*'
-                          && filtered.some(r => r.trim().startsWith('!'));
+      // 检测白名单模式：最后一条规则是 * （空白名单或有 ! 规则的白名单）
+      const lastIsStar = filtered.length > 0 && filtered[filtered.length - 1].trim() === '*';
+      const hasWhiteRules = filtered.some(r => r.trim().startsWith('!'));
+      const isWhitelist = lastIsStar && (hasWhiteRules || filtered.length === 1);
       this._folderWhitelistMode = isWhitelist;
       // 白名单模式下，显示 ! 规则（去掉前缀），隐藏末尾的 *
       let displayRules = filtered;
       if (isWhitelist) {
-        displayRules = filtered.filter(r => r.trim() !== '*').map(r => {
-          const t = r.trim();
-          return t.startsWith('!') ? t.slice(1) : t;
+        displayRules = filtered.filter(r => r.trim() !== '*' && r.trim().startsWith('!')).map(r => {
+          return r.trim().slice(1);
         });
       }
       block.innerHTML = this.renderIgnoreBlock(displayRules, 'folder', isWhitelist);
@@ -708,9 +708,9 @@ const app = {
     } else {
       body = rules.map((r, i) => `
         <div class="ignore-line">
-          <button class="ignore-toggle on" style="color:${isWhitelist ? 'var(--green)' : 'var(--red)'}">
-            ${isWhitelist ? '✓' : '×'}
-          </button>
+          <span class="ignore-icon" style="color:${isWhitelist ? 'var(--green)' : 'var(--red)'}; font-size:12px; min-width:16px; text-align:center">
+            ${isWhitelist ? '✓' : '■'}
+          </span>
           <span class="line-text">${r}</span>
           <span class="line-del" onclick="app.removeIgnoreRule('${type}', ${i})">x</span>
         </div>
