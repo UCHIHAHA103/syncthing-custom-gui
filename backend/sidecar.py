@@ -1279,7 +1279,14 @@ class SidecarHandler(BaseHTTPRequestHandler):
             rules = []
             if sync_ignore_path.exists():
                 lines = sync_ignore_path.read_text(encoding="utf-8").splitlines()
-                rules = [l for l in lines if l.strip() and not l.strip().startswith("//") and not l.strip().startswith("#include")]
+                for l in lines:
+                    t = l.strip()
+                    if not t or t.startswith("#include"):
+                        continue
+                    # 保留 //[black] 和 //[white] 备份标记，跳过其他注释
+                    if t.startswith("//") and not t.startswith("//[black]") and not t.startswith("//[white]"):
+                        continue
+                    rules.append(t)
             else:
                 if whitelist:
                     rules = ["*"]
