@@ -860,7 +860,11 @@ const app = {
     if (!this.selectedFolder) return;
     const fid = this.selectedFolder.id;
     const folderPath = this.selectedFolder.path;
-    if (!folderPath || !this.sidecarOk) return;
+    console.log(`[toggleWhitelistMode] START: fid=${fid}, enabled=${enabled}, path="${folderPath}"`);
+    if (!folderPath || !this.sidecarOk) {
+      console.warn(`[toggleWhitelistMode] ABORT: path="${folderPath}", sidecarOk=${this.sidecarOk}`);
+      return;
+    }
 
     // 从 .sync-ignore 读取当前规则
     const sep = folderPath.includes('/') ? '/' : '\\';
@@ -869,6 +873,7 @@ const app = {
     try {
       const resp = await API.sideFetch(`/api/read-file?path=${encodeURIComponent(syncIgnorePath)}`);
       if (resp && resp.content !== undefined) {
+        console.log(`[toggleWhitelistMode] raw .sync-ignore:\n---\n${resp.content}---`);
         for (const line of resp.content.split('\n')) {
           const t = line.trim();
           if (!t || t.startsWith('#include')) continue;
@@ -877,7 +882,10 @@ const app = {
           currentRules.push(t);
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      console.error(`[toggleWhitelistMode] read error:`, e);
+    }
+    console.log(`[toggleWhitelistMode] currentRules:`, JSON.stringify(currentRules));
 
     let newRules = [];
     if (enabled) {
@@ -917,18 +925,14 @@ const app = {
       }
     }
 
+    console.log(`[toggleWhitelistMode] newRules:`, JSON.stringify(newRules));
+
     // 写回 .sync-ignore
     const mode = enabled ? 'whitelist' : 'blacklist';
     let content = `// 同步忽略规则 - mode: ${mode}\n`;
     content += newRules.join('\n') + '\n';
+    console.log(`[toggleWhitelistMode] writing content:\n---\n${content}---`);
 
-    // 通过 sidecar 写文件（直接用 edit-sync-ignore 的写入逻辑太复杂，直接构造完整内容）
-    // 用 edit-sync-ignore 的 "set" 方式：先清空再写入
-    // 更简单：直接用 read-file 的反向——但 sidecar 没有 write-file API
-    // 最简单的方案：先 remove 所有规则，再逐个 add
-    // 或者用一个新的 action: "set-all"
-
-    // 通过多次 edit-sync-ignore 实现太慢，直接扩展一个 action
     await API.sideFetch('/api/edit-sync-ignore', 'POST', {
       folderId: fid,
       path: folderPath,
@@ -937,7 +941,7 @@ const app = {
       whitelist: enabled
     });
 
-    console.log(`[toggleWhitelistMode] ${fid}: whitelist=${enabled}, rules=${newRules.length}`);
+    console.log(`[toggleWhitelistMode] DONE: fid=${fid}, whitelist=${enabled}, newRules=${newRules.length}`);
     this.loadFolderIgnores(fid);
   },
 
