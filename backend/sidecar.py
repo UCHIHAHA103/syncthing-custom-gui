@@ -685,14 +685,6 @@ def apply_ignore_rules_to_folders():
         except Exception as e:
             print(f"[ignore-rules] Failed to write {fid}/.stignore: {e}")
 
-        # 确保 .sync-ignore 存在（#include 依赖它，不存在会导致 Syncthing 报错）
-        if not sync_ignore_path.exists():
-            try:
-                sync_ignore_path.write_text("// 同步忽略规则 - mode: blacklist\n", encoding="utf-8")
-                print(f"[ignore-rules] Created empty .sync-ignore for {fid}")
-            except Exception as e:
-                print(f"[ignore-rules] Failed to create .sync-ignore for {fid}: {e}")
-
         # 2. 构建 .sync-ignore（文件夹专属规则，会被 Syncthing 同步到所有设备）
         fr = folder_rules.get(fid)
         if fr:
@@ -725,10 +717,7 @@ def apply_ignore_rules_to_folders():
 
 
 def ensure_stignore_includes():
-    """确保所有文件夹：
-    1. .sync-ignore 文件存在（不存在就创建空文件，避免 Syncthing #include 报错）
-    2. .stignore 里有 #include .sync-ignore
-    """
+    """确保所有存在 .sync-ignore 的文件夹的 .stignore 里有 #include .sync-ignore"""
     config = syncthing_api("GET", "/rest/config")
     if not config:
         return
@@ -738,14 +727,8 @@ def ensure_stignore_includes():
         if not folder_path or not os.path.isdir(folder_path):
             continue
         sync_ignore = Path(folder_path) / ".sync-ignore"
-        # 确保 .sync-ignore 文件存在（#include 依赖它）
         if not sync_ignore.exists():
-            try:
-                sync_ignore.write_text("// 同步忽略规则 - mode: blacklist\n", encoding="utf-8")
-                print(f"[ignore-rules] Created empty .sync-ignore for {fid}")
-            except Exception as e:
-                print(f"[ignore-rules] Failed to create .sync-ignore for {fid}: {e}")
-                continue
+            continue
         # 通过 Syncthing API 读取当前忽略规则
         import urllib.parse
         encoded_id = urllib.parse.quote(fid, safe='')
@@ -856,6 +839,17 @@ def migrate_folder_path(folder_id, new_path):
     return {"success": True, "steps": steps}
 
 
+def ensure_sync_ignore(folder_path):
+    """确保文件夹下 .sync-ignore 文件存在（#include 依赖它，不存在会导致 Syncthing 报错拒绝扫描）"""
+    sync_ignore = Path(folder_path) / ".sync-ignore"
+    if not sync_ignore.exists():
+        try:
+            sync_ignore.write_text("// 同步忽略规则 - mode: blacklist\n", encoding="utf-8")
+            print(f"[ignore-rules] Created .sync-ignore at {folder_path}")
+        except Exception as e:
+            print(f"[ignore-rules] Failed to create .sync-ignore at {folder_path}: {e}")
+
+
 # ===== 添加文件夹 =====
 
 def add_folder(path, label=None, paused=True):
@@ -890,6 +884,9 @@ def add_folder(path, label=None, paused=True):
         lines.append("#include .sync-ignore")
         stignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
         print(f"[add-folder] Created .stignore with #include .sync-ignore")
+
+    # 确保 .sync-ignore 存在（#include 依赖它）
+    ensure_sync_ignore(str(path_obj))
 
     # 生成文件夹 ID（保留原始大小写）
     folder_id = path_obj.name.replace(" ", "-")[:32]
@@ -1308,6 +1305,9 @@ class SidecarHandler(BaseHTTPRequestHandler):
                 path_obj.mkdir(parents=True, exist_ok=True)
                 (path_obj / ".stfolder").mkdir(exist_ok=True)
 
+                # 确保 .sync-ignore 存在（#include 依赖它）
+                ensure_sync_ignore(local_path)
+
                 # 立即返回成功
                 self.send_json({"success": True})
 
@@ -1608,6 +1608,8 @@ class SidecarHandler(BaseHTTPRequestHandler):
                 lines.append("#include .sync-ignore")
                 stignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
                 print(f"[sync-to-local] Created .stignore with #include .sync-ignore")
+            # 确保 .sync-ignore 存在（#include 依赖它）
+            ensure_sync_ignore(local_path)
             # 获取 NAS 端文件夹信息
             import urllib.parse
             encoded_id = urllib.parse.quote(folder_id, safe='')
