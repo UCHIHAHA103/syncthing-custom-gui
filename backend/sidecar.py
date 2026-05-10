@@ -245,6 +245,20 @@ _transfer_log = []  # [{file, folder, events: [{time, event, detail}]}]
 _transfer_log_lock = threading.Lock()
 MAX_TRANSFER_LOG = 200  # 最多保留 200 条记录
 
+# 追踪进行中的下载：{(folder, item): {start_time, conn_snapshot: {deviceID: outBytes}}}
+_active_downloads = {}
+_active_downloads_lock = threading.Lock()
+
+def _snapshot_connections():
+    """获取当前各设备的 inBytesTotal 快照（本机是接收端，看 inBytes）"""
+    try:
+        conns = syncthing_api("GET", "/rest/system/connections")
+        if conns and "connections" in conns:
+            return {did: v.get("inBytesTotal", 0) for did, v in conns["connections"].items()}
+    except Exception:
+        pass
+    return {}
+
 
 def transfer_event_watcher():
     """后台线程：监听 Syncthing Events，记录文件级传输时间线"""
@@ -294,13 +308,49 @@ def transfer_event_watcher():
                                         f"items={data.get('items', 0)}")
 
                 elif etype == "ItemStarted" and item:
+                    action = data.get('action', '')
+                    ftype = data.get('type', '')
                     _log_transfer_event(folder, item, ev_time, "Started",
-                                        f"action={data.get('action','')} type={data.get('type','')}")
+                                        f"action={action} type={ftype}")
+                    if action == "update" and ftype == "file":
+                        snap = _snapshot_connections()
+                        with _active_downloads_lock:
+                            _active_downloads[(folder, item)] = {
+                                "start_time": time.time(),
+                                "conn_start": snap,
+                            }
 
                 elif etype == "ItemFinished" and item:
                     err = data.get("error", "")
-                    _log_transfer_event(folder, item, ev_time, "Finished",
-                                        f"action={data.get('action','')} error={err}" if err else f"action={data.get('action','')}")
+                    action = data.get('action', '')
+                    speed_info = ""
+                    with _active_downloads_lock:
+                        key = (folder, item)
+                        dl = _active_downloads.pop(key, None)
+                    if dl and action == "update":
+                        elapsed = max(time.time() - dl["start_time"], 0.1)
+                        snap_end = _snapshot_connections()
+                        snap_start = dl["conn_start"]
+                        # 计算每个设备在此期间传入的字节数差值
+                        src_parts = []
+                        total_delta = 0
+                        for did, end_bytes in snap_end.items():
+                            start_bytes = snap_start.get(did, end_bytes)
+                            delta = end_bytes - start_bytes
+                            if delta > 0:
+                                dev_name = _get_device_name(did)
+                                mb = delta / 1024 / 1024
+                                src_parts.append(f"{dev_name}={mb:.1f}MB")
+                                total_delta += delta
+                        total_mb = total_delta / 1024 / 1024
+                        speed_mbs = total_mb / elapsed if total_mb > 0 else 0
+                        sources_str = " + ".join(src_parts) if src_parts else "local/cached"
+                        speed_info = f" | {total_mb:.1f}MB in {elapsed:.1f}s ({speed_mbs:.2f}MB/s) from [{sources_str}]"
+                    detail = f"action={action}"
+                    if err:
+                        detail += f" error={err}"
+                    detail += speed_info
+                    _log_transfer_event(folder, item, ev_time, "Finished", detail)
 
                 elif etype == "FolderCompletion" and folder:
                     comp = data.get("completion", 0)
@@ -1217,20 +1267,29 @@ class SidecarHandler(BaseHTTPRequestHandler):
             if any(f["id"] == folder_id for f in local_config.get("folders", [])):
                 self.send_json({"error": "本地已存在该文件夹"}, 400)
                 return
-            # 获取 NAS 设备 ID
-            nas_device_id = ""
-            for d in local_config.get("devices", []):
-                if d.get("name", "").lower().startswith("nas"):
-                    nas_device_id = d["deviceID"]
-                    break
-            if not nas_device_id:
-                status = syncthing_api("GET", "/rest/system/status")
-                my_id = status.get("myID", "") if status else ""
+            # 获取设备列表：share_all_devices=true 时添加所有远程设备，否则只加 NAS
+            share_all = body.get("shareAllDevices", True)
+            status = syncthing_api("GET", "/rest/system/status")
+            my_id = status.get("myID", "") if status else ""
+            devices = []
+            if share_all:
                 for d in local_config.get("devices", []):
                     if d["deviceID"] != my_id:
+                        devices.append({"deviceID": d["deviceID"], "introducedBy": ""})
+                print(f"[sync-to-local] {folder_id}: sharing with ALL {len(devices)} devices")
+            else:
+                nas_device_id = ""
+                for d in local_config.get("devices", []):
+                    if d.get("name", "").lower().startswith("nas"):
                         nas_device_id = d["deviceID"]
                         break
-            devices = [{"deviceID": nas_device_id, "introducedBy": ""}] if nas_device_id else []
+                if not nas_device_id:
+                    for d in local_config.get("devices", []):
+                        if d["deviceID"] != my_id:
+                            nas_device_id = d["deviceID"]
+                            break
+                devices = [{"deviceID": nas_device_id, "introducedBy": ""}] if nas_device_id else []
+                print(f"[sync-to-local] {folder_id}: sharing with NAS only")
             new_folder = {
                 "id": folder_id,
                 "label": label,

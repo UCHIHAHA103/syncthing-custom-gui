@@ -1095,7 +1095,8 @@ const app = {
     }
     try {
       const autoResume = localStorage.getItem('autoSyncOnAdd') === 'true';
-      const result = await API.syncToLocal(folderId, localPath, autoResume);
+      const shareAll = localStorage.getItem('shareAllDevices') !== 'false';
+      const result = await API.syncToLocal(folderId, localPath, autoResume, shareAll);
       if (result.error) {
         if (errEl) { errEl.style.display = 'block'; errEl.textContent = result.error; }
         return;
@@ -1242,6 +1243,7 @@ const app = {
   showSettings() {
     const autoSyncOnModify = localStorage.getItem('autoSyncOnModify') === 'true';
     const autoSyncOnAdd = localStorage.getItem('autoSyncOnAdd') === 'true';
+    const shareAllDevices = localStorage.getItem('shareAllDevices') !== 'false'; // 默认 true
     const cloudEnabled = localStorage.getItem('cloudServerEnabled') === 'true';
     const cloudDeviceId = localStorage.getItem('cloudServerDeviceId') || '';
     const cloudAddress = localStorage.getItem('cloudServerAddress') || '';
@@ -1271,6 +1273,11 @@ const app = {
           添加文件夹后自动开始同步
         </label>
         <div class="form-hint">关闭时添加后文件夹暂停，可先配置忽略规则再手动恢复</div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-muted);cursor:pointer;padding:6px 0">
+          <input type="checkbox" id="settShareAllDevices" ${shareAllDevices ? 'checked' : ''}>
+          同步时默认共享给所有已连接设备
+        </label>
+        <div class="form-hint">开启后点击"同步"会自动关联 NAS + 云服务器等所有设备，关闭则只关联 NAS</div>
       </div>
       <div class="form-group" style="border-top:1px solid var(--surface-3);padding-top:12px;margin-top:8px">
         <label class="form-label">云服务器中转</label>
@@ -1309,6 +1316,7 @@ const app = {
     API.sidecar = sidecar;
     localStorage.setItem('autoSyncOnModify', document.getElementById('settAutoSyncModify').checked);
     localStorage.setItem('autoSyncOnAdd', document.getElementById('settAutoSyncAdd').checked);
+    localStorage.setItem('shareAllDevices', document.getElementById('settShareAllDevices').checked);
 
     // 云服务器设置
     const cloudEnabled = document.getElementById('settCloudEnabled').checked;

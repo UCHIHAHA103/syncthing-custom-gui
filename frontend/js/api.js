@@ -69,7 +69,7 @@ const API = {
   async findPath(name) { return this.sideFetch(`/api/find-path?name=${encodeURIComponent(name)}`); },
   async getNasFolders() { return this.sideFetch('/api/nas-folders'); },
   async getNasFolderStatus(folderId) { return this.sideFetch(`/api/nas-folder-status?folder=${encodeURIComponent(folderId)}`); },
-  async syncToLocal(folderId, localPath, autoResume) { return this.sideFetch('/api/sync-to-local', 'POST', { folderId, localPath, autoResume: !!autoResume }); },
+  async syncToLocal(folderId, localPath, autoResume, shareAllDevices = true) { return this.sideFetch('/api/sync-to-local', 'POST', { folderId, localPath, autoResume: !!autoResume, shareAllDevices: !!shareAllDevices }); },
   async unsyncLocal(folderId) { return this.sideFetch('/api/unsync-local', 'POST', { folderId }); },
   async deleteFolder(folderId) { return this.sideFetch('/api/delete-folder', 'POST', { folderId }); },
   async migratePath(folderId, newPath) {
