@@ -1287,6 +1287,9 @@ class SidecarHandler(BaseHTTPRequestHandler):
             if action == "add":
                 if whitelist:
                     new_rule = rule if rule.startswith("!") else f"!{rule}"
+                    if new_rule in rules:
+                        self.send_json({"success": True, "duplicate": True})
+                        return
                     # 在 * 之前插入
                     if "*" in rules:
                         star_idx = rules.index("*")
@@ -1295,6 +1298,9 @@ class SidecarHandler(BaseHTTPRequestHandler):
                         rules.append(new_rule)
                         rules.append("*")
                 else:
+                    if rule in rules:
+                        self.send_json({"success": True, "duplicate": True})
+                        return
                     rules.append(rule)
 
             elif action == "remove":
