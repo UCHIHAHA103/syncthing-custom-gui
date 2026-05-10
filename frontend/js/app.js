@@ -322,6 +322,8 @@ const app = {
     const myId = this.systemStatus?.myID || '';
 
     // 构建新的设备数据
+    const cloudDeviceId = localStorage.getItem('cloudServerDeviceId') || '';
+    const cloudEnabled = localStorage.getItem('cloudServerEnabled') === 'true';
     const newDeviceData = [];
     for (const dev of this.devices) {
       if (dev.deviceID === myId) continue;
@@ -329,9 +331,10 @@ const app = {
       const connected = conn?.connected;
       const name = dev.name || dev.deviceID.substring(0, 7);
       const type = conn?.type || '';
+      const isCloud = cloudEnabled && dev.deviceID === cloudDeviceId;
       const meta = connections ? (connected ? (type.includes('relay') ? 'Relay' : type.replace('-', ' ')) : '离线') : '--';
       const dotColor = connected ? (type.includes('relay') ? 'orange' : 'green') : 'text-dim';
-      newDeviceData.push({ id: dev.deviceID, name, meta, dotColor });
+      newDeviceData.push({ id: dev.deviceID, name: isCloud ? `☁ ${name}` : name, meta, dotColor, isCloud });
     }
 
     // 生成签名比较，避免无变化时重建 DOM
@@ -1235,6 +1238,16 @@ const app = {
   showSettings() {
     const autoSyncOnModify = localStorage.getItem('autoSyncOnModify') === 'true';
     const autoSyncOnAdd = localStorage.getItem('autoSyncOnAdd') === 'true';
+    const cloudEnabled = localStorage.getItem('cloudServerEnabled') === 'true';
+    const cloudDeviceId = localStorage.getItem('cloudServerDeviceId') || '';
+    const cloudAddress = localStorage.getItem('cloudServerAddress') || '';
+    const cloudName = localStorage.getItem('cloudServerName') || 'cloud-server';
+
+    // 检查云服务器是否已在设备列表中
+    const cloudDevice = cloudDeviceId ? this.devices.find(d => d.deviceID === cloudDeviceId) : null;
+    const cloudConn = this.connections?.connections?.[cloudDeviceId];
+    const cloudStatus = cloudDevice ? (cloudConn?.connected ? '✅ 已连接' : '❌ 离线') : '未添加';
+
     document.getElementById('modalTitle').textContent = '设置';
     document.getElementById('modalBody').innerHTML = `
       <div class="form-group">
@@ -1255,6 +1268,30 @@ const app = {
         </label>
         <div class="form-hint">关闭时添加后文件夹暂停，可先配置忽略规则再手动恢复</div>
       </div>
+      <div class="form-group" style="border-top:1px solid var(--surface-3);padding-top:12px;margin-top:8px">
+        <label class="form-label">☁️ 云服务器中转</label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-muted);cursor:pointer;padding:6px 0">
+          <input type="checkbox" id="settCloudEnabled" ${cloudEnabled ? 'checked' : ''}
+                 onchange="document.getElementById('cloudConfig').style.display=this.checked?'block':'none'">
+          启用云服务器加速（关闭后自动回退到 NAS 直连/中继）
+        </label>
+        <div class="form-hint">开启后数据通过云服务器中转，提升公网同步速度。关闭或云服务器失效时自动回退。</div>
+        <div id="cloudConfig" style="display:${cloudEnabled ? 'block' : 'none'};margin-top:8px">
+          <div style="margin-bottom:6px">
+            <label style="font-size:11px;color:var(--text-dim)">设备 ID</label>
+            <input class="form-input" id="settCloudDeviceId" value="${cloudDeviceId}" placeholder="XXXXXXX-XXXXXXX-XXXXXXX-..." style="font-size:11px">
+          </div>
+          <div style="margin-bottom:6px">
+            <label style="font-size:11px;color:var(--text-dim)">地址</label>
+            <input class="form-input" id="settCloudAddress" value="${cloudAddress}" placeholder="tcp://42.192.65.73:22000" style="font-size:11px">
+          </div>
+          <div style="margin-bottom:6px">
+            <label style="font-size:11px;color:var(--text-dim)">名称</label>
+            <input class="form-input" id="settCloudName" value="${cloudName}" style="font-size:11px">
+          </div>
+          <div class="form-hint">状态：${cloudStatus}</div>
+        </div>
+      </div>
     `;
     document.getElementById('modalFooter').innerHTML = `
       <button class="toolbar-btn" onclick="app.closeModal('folderSettingsModal')">取消</button>
@@ -1263,11 +1300,61 @@ const app = {
     document.getElementById('folderSettingsModal').style.display = 'flex';
   },
 
-  saveSettings() {
+  async saveSettings() {
     const sidecar = document.getElementById('settSidecarUrl').value;
     API.sidecar = sidecar;
     localStorage.setItem('autoSyncOnModify', document.getElementById('settAutoSyncModify').checked);
     localStorage.setItem('autoSyncOnAdd', document.getElementById('settAutoSyncAdd').checked);
+
+    // 云服务器设置
+    const cloudEnabled = document.getElementById('settCloudEnabled').checked;
+    const cloudDeviceId = (document.getElementById('settCloudDeviceId')?.value || '').trim();
+    const cloudAddress = (document.getElementById('settCloudAddress')?.value || '').trim();
+    const cloudName = (document.getElementById('settCloudName')?.value || 'cloud-server').trim();
+
+    const prevEnabled = localStorage.getItem('cloudServerEnabled') === 'true';
+    const prevDeviceId = localStorage.getItem('cloudServerDeviceId') || '';
+
+    localStorage.setItem('cloudServerEnabled', cloudEnabled);
+    localStorage.setItem('cloudServerDeviceId', cloudDeviceId);
+    localStorage.setItem('cloudServerAddress', cloudAddress);
+    localStorage.setItem('cloudServerName', cloudName);
+
+    try {
+      const config = await API.getConfig();
+      if (cloudEnabled && cloudDeviceId) {
+        // 添加云服务器设备（如果不存在）
+        const exists = config.devices.some(d => d.deviceID === cloudDeviceId);
+        if (!exists) {
+          config.devices.push({
+            deviceID: cloudDeviceId,
+            name: cloudName,
+            addresses: [cloudAddress || 'dynamic'],
+            autoAcceptFolders: false,
+            paused: false,
+          });
+          console.log('[settings] cloud server device added');
+        }
+        // 确保所有文件夹共享给云服务器
+        for (const f of config.folders) {
+          const hasCloud = f.devices.some(d => d.deviceID === cloudDeviceId);
+          if (!hasCloud) {
+            f.devices.push({ deviceID: cloudDeviceId, introducedBy: '' });
+          }
+        }
+      } else if (!cloudEnabled && prevEnabled && prevDeviceId) {
+        // 关闭云服务器：从所有文件夹中移除，并删除设备
+        for (const f of config.folders) {
+          f.devices = f.devices.filter(d => d.deviceID !== prevDeviceId);
+        }
+        config.devices = config.devices.filter(d => d.deviceID !== prevDeviceId);
+        console.log('[settings] cloud server device removed');
+      }
+      await API.setConfig(config);
+    } catch (e) {
+      console.error('[settings] cloud server config error:', e);
+    }
+
     this.closeModal('folderSettingsModal');
     this.refresh();
     this.initSidecar();
