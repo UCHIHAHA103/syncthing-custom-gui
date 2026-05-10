@@ -1149,8 +1149,7 @@ class SidecarHandler(BaseHTTPRequestHandler):
                 path_obj.mkdir(parents=True, exist_ok=True)
                 (path_obj / ".stfolder").mkdir(exist_ok=True)
 
-                # 确保 .sync-ignore 存在（#include 依赖它）
-                ensure_sync_ignore(local_path)
+                # 不创建 .sync-ignore —— NAS 上已有的会通过 Syncthing 同步过来，提前创建会导致冲突
 
                 # 立即返回成功
                 self.send_json({"success": True})
@@ -1471,8 +1470,7 @@ class SidecarHandler(BaseHTTPRequestHandler):
                 lines.append("#include .sync-ignore")
                 stignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
                 print(f"[sync-to-local] Created .stignore with #include .sync-ignore")
-            # 确保 .sync-ignore 存在（#include 依赖它）
-            ensure_sync_ignore(local_path)
+            # 不创建 .sync-ignore —— NAS 上已有的会通过 Syncthing 同步过来，提前创建会导致冲突
             # 获取 NAS 端文件夹信息
             import urllib.parse
             encoded_id = urllib.parse.quote(folder_id, safe='')

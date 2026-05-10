@@ -976,6 +976,8 @@ const app = {
           throw new Error('文件夹路径未知，无法浏览');
         }
       }
+      // 过滤掉 . 开头的文件（.stignore, .sync-ignore, .sync-conflict 等）
+      items = items.filter(item => !item.name.startsWith('.'));
       // 排序：目录在前
       items.sort((a, b) => (b.isDir - a.isDir) || a.name.localeCompare(b.name));
       let html = `<div style="font-size:10px;color:var(--text-dim);padding:4px 6px;border-bottom:1px solid var(--surface-3)">
