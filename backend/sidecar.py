@@ -1303,6 +1303,10 @@ class SidecarHandler(BaseHTTPRequestHandler):
                         return
                     rules.append(rule)
 
+            elif action == "set-all":
+                # 直接替换所有规则（用于模式切换等批量操作）
+                rules = body.get("rules", [])
+
             elif action == "remove":
                 # 提取显示规则（和前端 loadFolderIgnores 一致的过滤逻辑）
                 if whitelist:

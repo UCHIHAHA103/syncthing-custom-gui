@@ -859,81 +859,66 @@ const app = {
   async toggleWhitelistMode(enabled) {
     if (!this.selectedFolder) return;
     const fid = this.selectedFolder.id;
-    const data = await API.getIgnores(fid);
-    let ignores = data.ignore || [];
-    // 分离全局注入段和用户规则
-    let inGlobal = false;
-    const userRules = [];
-    const globalRules = [];
-    for (const line of ignores) {
-      if (line.includes('GLOBAL IGNORE START')) { inGlobal = true; globalRules.push(line); continue; }
-      if (line.includes('GLOBAL IGNORE END')) { inGlobal = false; globalRules.push(line); continue; }
-      if (inGlobal) { globalRules.push(line); continue; }
-      userRules.push(line);
-    }
+    const folderPath = this.selectedFolder.path;
+    if (!folderPath || !this.sidecarOk) return;
 
-    let newUserRules = [];
-    if (enabled) {
-      // 切换到白名单模式：把当前黑名单规则注释保存，恢复已保存的白名单规则
-      const savedWhite = []; // 从注释中恢复白名单规则
-      const blackRules = []; // 当前活跃的黑名单规则
-      for (const r of userRules) {
-        const t = r.trim();
-        if (t.startsWith('//[white] ')) {
-          // 之前保存的白名单规则，恢复
-          savedWhite.push(t.slice('//[white] '.length));
-        } else if (t.startsWith('//[black] ')) {
-          // 已经注释的黑名单规则，保留
-          newUserRules.push(r);
-        } else if (t === '*' || t.startsWith('//')) {
-          // 跳过
-        } else {
-          // 活跃的黑名单规则 → 注释保存
-          blackRules.push(r);
+    // 从 .sync-ignore 读取当前规则
+    const sep = folderPath.includes('/') ? '/' : '\\';
+    const syncIgnorePath = `${folderPath}${sep}.sync-ignore`;
+    let currentRules = [];
+    try {
+      const resp = await API.sideFetch(`/api/read-file?path=${encodeURIComponent(syncIgnorePath)}`);
+      if (resp && resp.content !== undefined) {
+        for (const line of resp.content.split('\n')) {
+          const t = line.trim();
+          if (!t || t.startsWith('//') || t.startsWith('#include')) continue;
+          currentRules.push(t);
         }
       }
-      // 写入：注释的黑名单 + 恢复的白名单 + *
-      for (const r of blackRules) {
-        newUserRules.push(`//[black] ${r}`);
+    } catch (e) {}
+
+    let newRules = [];
+    if (enabled) {
+      // 黑名单 → 白名单：当前黑名单规则清除，创建空白名单
+      // 保留现有规则作为注释备份
+      for (const r of currentRules) {
+        if (r !== '*') newRules.push(`//[black] ${r}`);
       }
-      for (const r of savedWhite) {
-        newUserRules.push(r);
-      }
-      newUserRules.push('*');
+      newRules.push('*');
     } else {
-      // 切换到黑名单模式：把当前白名单规则注释保存，恢复已保存的黑名单规则
-      const savedBlack = []; // 从注释中恢复黑名单规则
-      const whiteRules = []; // 当前活跃的白名单规则
-      for (const r of userRules) {
+      // 白名单 → 黑名单：恢复之前备份的黑名单规则
+      for (const r of currentRules) {
         const t = r.trim();
         if (t.startsWith('//[black] ')) {
-          // 之前保存的黑名单规则，恢复
-          savedBlack.push(t.slice('//[black] '.length));
-        } else if (t.startsWith('//[white] ')) {
-          // 已经注释的白名单规则，保留
-          newUserRules.push(r);
-        } else if (t === '*' || t.startsWith('//')) {
-          // 跳过 * 和普通注释
-        } else if (t.startsWith('!')) {
-          // 活跃的白名单规则 → 注释保存
-          whiteRules.push(r);
-        } else {
-          // 其他活跃规则保留
-          savedBlack.push(r);
+          newRules.push(t.slice('//[black] '.length));
+        } else if (t === '*' || t.startsWith('!')) {
+          // 白名单规则备份
+          if (t.startsWith('!')) newRules.push(`//[white] ${t}`);
         }
-      }
-      // 写入：注释的白名单 + 恢复的黑名单
-      for (const r of whiteRules) {
-        newUserRules.push(`//[white] ${r}`);
-      }
-      for (const r of savedBlack) {
-        newUserRules.push(r);
       }
     }
 
-    const finalIgnores = [...globalRules, ...newUserRules];
-    await API.setIgnores(fid, { ignore: finalIgnores, patterns: data.patterns || [] });
-    console.log(`[toggleWhitelistMode] ${fid}: whitelist=${enabled}, rules=${newUserRules.length}`);
+    // 写回 .sync-ignore
+    const mode = enabled ? 'whitelist' : 'blacklist';
+    let content = `// 同步忽略规则 - mode: ${mode}\n`;
+    content += newRules.join('\n') + '\n';
+
+    // 通过 sidecar 写文件（直接用 edit-sync-ignore 的写入逻辑太复杂，直接构造完整内容）
+    // 用 edit-sync-ignore 的 "set" 方式：先清空再写入
+    // 更简单：直接用 read-file 的反向——但 sidecar 没有 write-file API
+    // 最简单的方案：先 remove 所有规则，再逐个 add
+    // 或者用一个新的 action: "set-all"
+
+    // 通过多次 edit-sync-ignore 实现太慢，直接扩展一个 action
+    await API.sideFetch('/api/edit-sync-ignore', 'POST', {
+      folderId: fid,
+      path: folderPath,
+      action: 'set-all',
+      rules: newRules,
+      whitelist: enabled
+    });
+
+    console.log(`[toggleWhitelistMode] ${fid}: whitelist=${enabled}, rules=${newRules.length}`);
     this.loadFolderIgnores(fid);
   },
 
