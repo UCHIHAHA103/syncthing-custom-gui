@@ -1269,7 +1269,7 @@ const app = {
         <div class="form-hint">关闭时添加后文件夹暂停，可先配置忽略规则再手动恢复</div>
       </div>
       <div class="form-group" style="border-top:1px solid var(--surface-3);padding-top:12px;margin-top:8px">
-        <label class="form-label">☁️ 云服务器中转</label>
+        <label class="form-label">云服务器中转</label>
         <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-muted);cursor:pointer;padding:6px 0">
           <input type="checkbox" id="settCloudEnabled" ${cloudEnabled ? 'checked' : ''}
                  onchange="document.getElementById('cloudConfig').style.display=this.checked?'block':'none'">
