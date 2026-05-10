@@ -678,7 +678,10 @@ def apply_ignore_rules_to_folders():
                     stignore_lines.append(line)
 
         try:
-            stignore_path.write_text("\n".join(stignore_lines) + "\n", encoding="utf-8")
+            import urllib.parse
+            encoded_id = urllib.parse.quote(fid, safe='')
+            syncthing_api("POST", f"/rest/db/ignores?folder={encoded_id}",
+                          {"ignore": stignore_lines})
         except Exception as e:
             print(f"[ignore-rules] Failed to write {fid}/.stignore: {e}")
 
@@ -713,28 +716,28 @@ def ensure_stignore_includes():
     if not config:
         return
     for folder in config.get("folders", []):
+        fid = folder.get("id", "")
         folder_path = folder.get("path", "")
         if not folder_path or not os.path.isdir(folder_path):
             continue
         sync_ignore = Path(folder_path) / ".sync-ignore"
-        stignore = Path(folder_path) / ".stignore"
         if not sync_ignore.exists():
             continue
-        # 检查 .stignore 是否已有 #include
+        # 通过 Syncthing API 读取当前忽略规则
+        import urllib.parse
+        encoded_id = urllib.parse.quote(fid, safe='')
+        ignores_data = syncthing_api("GET", f"/rest/db/ignores?folder={encoded_id}")
+        if not ignores_data:
+            continue
+        current_ignores = ignores_data.get("ignore", []) or []
         include_line = "#include .sync-ignore"
-        if stignore.exists():
-            content = stignore.read_text(encoding="utf-8")
-            if include_line in content:
-                continue
-            # 追加 #include
-            if not content.endswith("\n"):
-                content += "\n"
-            content += include_line + "\n"
-            stignore.write_text(content, encoding="utf-8")
-        else:
-            # 创建 .stignore
-            stignore.write_text(include_line + "\n", encoding="utf-8")
-        print(f"[ignore-rules] Added #include to {folder.get('id', '')}/.stignore")
+        if include_line in current_ignores:
+            continue
+        # 追加 #include
+        current_ignores.append(include_line)
+        syncthing_api("POST", f"/rest/db/ignores?folder={encoded_id}",
+                      {"ignore": current_ignores})
+        print(f"[ignore-rules] Added #include to {fid}/.stignore via API")
 
 
 def sync_global_ignore_to_folders():
