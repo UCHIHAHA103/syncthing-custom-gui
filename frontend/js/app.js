@@ -676,6 +676,10 @@ const app = {
     document.getElementById('panelFolderName').textContent = folder.label || folder.id;
     document.getElementById('folderIgnoreTag').textContent = `${folder.id}/.stignore`;
 
+    // 清空浏览器面板
+    const browser = document.getElementById('ignoreBrowser');
+    if (browser) { browser.style.display = 'none'; browser.innerHTML = ''; }
+
     // 加载忽略规则
     this.loadFolderIgnores(id);
 
@@ -942,9 +946,6 @@ const app = {
       }
       // 排序：目录在前
       items.sort((a, b) => (b.isDir - a.isDir) || a.name.localeCompare(b.name));
-      const isWhitelist = this._folderWhitelistMode;
-      const actionLabel = isWhitelist ? '加入白名单' : '忽略';
-      const actionColor = isWhitelist ? 'var(--green)' : 'var(--red)';
       let html = `<div style="font-size:10px;color:var(--text-dim);padding:4px 6px;border-bottom:1px solid var(--surface-3)">
         ${subpath ? `<span style="cursor:pointer;color:var(--accent)" onclick="app.showIgnoreBrowser('')">⬅ 根目录</span> / ` : ''}
         <span>${subpath || fid}</span>
@@ -958,13 +959,12 @@ const app = {
           const path = subpath ? `${subpath}${item.name}` : item.name;
           const displayName = item.name.replace(/\/$/, '');
           const drillDown = item.isDir ? `onclick="app.showIgnoreBrowser('${path.replace(/'/g, "\\'")}')"` : '';
-          return `<div class="ignore-browser-item" style="display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:11px;cursor:pointer;border-bottom:1px solid var(--surface-2)">
-            <span ${drillDown} style="flex:1;display:flex;align-items:center;gap:4px">
+          return `<div class="ignore-browser-item">
+            <span ${drillDown} class="ignore-browser-name">
               <span>${icon}</span>
-              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${displayName}</span>
+              <span class="ignore-browser-label">${displayName}</span>
             </span>
-            <span style="color:${actionColor};cursor:pointer;font-size:10px;white-space:nowrap" 
-                  onclick="event.stopPropagation();app.addIgnoreFromBrowser('${path.replace(/'/g, "\\'")}')">${actionLabel}</span>
+            <span class="ignore-browser-add" onclick="event.stopPropagation();app.addIgnoreFromBrowser('${path.replace(/'/g, "\\'")}')">+</span>
           </div>`;
         }).join('');
         if (items.length > 100) {

@@ -351,22 +351,43 @@ body {
 
 .ignore-browser {
   max-height: 200px; overflow-y: auto;
-  border-top: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 4px;
   background: var(--surface-1);
+  margin-top: 6px;
+}
+.ignore-browser-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; font-size: 11px; cursor: pointer;
+  border-bottom: 1px solid var(--surface-2);
 }
 .ignore-browser-item:hover { background: var(--surface-2); }
+.ignore-browser-name {
+  flex: 1; display: flex; align-items: center; gap: 4px;
+  overflow: hidden; min-width: 0;
+}
+.ignore-browser-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ignore-browser-add {
+  flex-shrink: 0; width: 18px; height: 18px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 3px; font-size: 14px; font-weight: bold;
+  color: var(--green); cursor: pointer; transition: background 0.15s;
+}
+.ignore-browser-add:hover { background: var(--surface-3); }
 
 .ignore-drop-zone {
-  border: 1px dashed var(--border);
-  border-radius: 4px;
-  padding: 10px; text-align: center;
-  margin: 6px 0; transition: all 0.2s;
-  font-size: 10px; color: var(--text-dim);
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 12px; text-align: center;
+  margin-top: 8px; transition: all 0.2s;
 }
+.ignore-drop-zone span { font-size: 11px; color: var(--text-dim); }
 .ignore-drop-zone.active {
   border-color: var(--accent); background: var(--accent-dim);
-  color: var(--accent);
 }
+.ignore-drop-zone.active span { color: var(--accent); }
 
 /* 备注 */
 .note-area {
