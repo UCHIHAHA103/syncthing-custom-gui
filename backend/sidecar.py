@@ -685,17 +685,16 @@ def apply_ignore_rules_to_folders():
         except Exception as e:
             print(f"[ignore-rules] Failed to write {fid}/.stignore: {e}")
 
-        # 2. 构建 .sync-ignore（文件夹专属规则，会被 Syncthing 同步到所有设备）
+        # 2. .sync-ignore 管理策略：
+        # - 实时操作由 /api/edit-sync-ignore 直接写文件（权威数据源）
+        # - JSON 只是备份/跨设备同步用
+        # - 这里只在 .sync-ignore 不存在时从 JSON 初始化（如 git 同步到新设备后首次启动）
         fr = folder_rules.get(fid)
-        if fr:
+        if fr and not sync_ignore_path.exists():
             mode = fr.get("mode", "blacklist")
             rules = fr.get("rules", [])
-            # 过滤掉脏数据（#include 不应该出现在规则中）
             rules = [r for r in rules if not r.strip().startswith("#include")]
-            if not rules and mode == "blacklist":
-                # 规则为空的黑名单，不覆盖现有 .sync-ignore（可能有用户手动添加的规则）
-                pass
-            else:
+            if rules or mode == "whitelist":
                 sync_lines = []
                 sync_lines.append(f"// 同步忽略规则 - mode: {mode}")
                 if mode == "whitelist":
@@ -707,6 +706,7 @@ def apply_ignore_rules_to_folders():
                         sync_lines.append(r)
                 try:
                     sync_ignore_path.write_text("\n".join(sync_lines) + "\n", encoding="utf-8")
+                    print(f"[ignore-rules] Initialized {fid}/.sync-ignore from JSON")
                 except Exception as e:
                     print(f"[ignore-rules] Failed to write {fid}/.sync-ignore: {e}")
         elif sync_ignore_path.exists():
@@ -1275,7 +1275,8 @@ class SidecarHandler(BaseHTTPRequestHandler):
                     set_folder_ignore_rules(folder_id, mode, rules)
                 else:
                     remove_folder_ignore_rules(folder_id)
-                threading.Thread(target=apply_ignore_rules_to_folders, daemon=True).start()
+                # 不触发 apply_ignore_rules_to_folders —— 前端已通过 edit-sync-ignore 直接操作了 .sync-ignore，
+                # JSON 只是备份/跨设备同步用，由后台 30s 定时器检测 mtime 变化时再同步
                 self.send_json({"success": True})
             else:
                 self.send_json({"error": "需要 folderId"}, 400)

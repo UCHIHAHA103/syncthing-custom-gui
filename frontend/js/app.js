@@ -713,17 +713,19 @@ const app = {
   async loadFolderIgnores(id) {
     const block = document.getElementById('folderIgnoreBlock');
     try {
-      console.log(`[loadFolderIgnores] ${id}: fetching...`);
       // 优先从 .sync-ignore 读取（通过 sidecar）
       let filtered = [];
       const folder = this.folders.find(f => f.id === id) || this.selectedFolder;
       const folderPath = folder?.path;
+      console.log(`[loadFolderIgnores] ${id}: folderPath="${folderPath}", folder.id=${folder?.id}`);
       if (folderPath && this.sidecarOk) {
         try {
           const sep = folderPath.includes('/') ? '/' : '\\';
           const syncIgnorePath = `${folderPath}${sep}.sync-ignore`;
+          console.log(`[loadFolderIgnores] ${id}: reading ${syncIgnorePath}`);
           const resp = await API.sideFetch(`/api/read-file?path=${encodeURIComponent(syncIgnorePath)}`);
           if (resp && resp.content !== undefined) {
+            console.log(`[loadFolderIgnores] ${id}: .sync-ignore content length=${resp.content.length}, raw="${resp.content.replace(/\n/g, '\\n')}"`);
             const lines = resp.content.split('\n');
             for (const line of lines) {
               const t = line.trim();
@@ -732,6 +734,7 @@ const app = {
             }
           }
         } catch (e) {
+          console.warn(`[loadFolderIgnores] ${id}: .sync-ignore read failed:`, e);
           // .sync-ignore 不存在，fallback 到 Syncthing API
         }
       }
