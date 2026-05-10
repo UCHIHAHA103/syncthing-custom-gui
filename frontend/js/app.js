@@ -1208,7 +1208,8 @@ const app = {
       this.startPolling();
       await this.refresh();
     } else {
-      await API.pauseFolder(id, paused);
+      const autoUpgrade = localStorage.getItem('autoUpgradeSendReceive') !== 'false';
+      await API.pauseFolder(id, paused, !paused && autoUpgrade);
       await this.refresh();
     }
   },
@@ -1620,6 +1621,7 @@ const app = {
     const autoSyncOnModify = localStorage.getItem('autoSyncOnModify') === 'true';
     const autoSyncOnAdd = localStorage.getItem('autoSyncOnAdd') === 'true';
     const shareAllDevices = localStorage.getItem('shareAllDevices') !== 'false'; // 默认 true
+    const autoUpgradeSendReceive = localStorage.getItem('autoUpgradeSendReceive') !== 'false'; // 默认 true
     const cloudEnabled = localStorage.getItem('cloudServerEnabled') === 'true';
     const cloudDeviceId = localStorage.getItem('cloudServerDeviceId') || '';
     const cloudAddress = localStorage.getItem('cloudServerAddress') || '';
@@ -1654,6 +1656,11 @@ const app = {
           同步时默认共享给所有已连接设备
         </label>
         <div class="form-hint">开启后点击"同步"会自动关联 NAS + 云服务器等所有设备，关闭则只关联 NAS</div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-muted);cursor:pointer;padding:6px 0">
+          <input type="checkbox" id="settAutoUpgrade" ${autoUpgradeSendReceive ? 'checked' : ''}>
+          接收完成后自动切换为双向同步
+        </label>
+        <div class="form-hint">开启后新同步的文件夹在接收完所有文件后自动从"仅接收"变为"双向同步"，关闭则保持仅接收</div>
       </div>
       <div class="form-group" style="border-top:1px solid var(--surface-3);padding-top:12px;margin-top:8px">
         <label class="form-label">云服务器中转</label>
@@ -1693,6 +1700,7 @@ const app = {
     localStorage.setItem('autoSyncOnModify', document.getElementById('settAutoSyncModify').checked);
     localStorage.setItem('autoSyncOnAdd', document.getElementById('settAutoSyncAdd').checked);
     localStorage.setItem('shareAllDevices', document.getElementById('settShareAllDevices').checked);
+    localStorage.setItem('autoUpgradeSendReceive', document.getElementById('settAutoUpgrade').checked);
 
     // 云服务器设置
     const cloudEnabled = document.getElementById('settCloudEnabled').checked;

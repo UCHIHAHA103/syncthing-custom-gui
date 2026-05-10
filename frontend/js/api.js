@@ -40,8 +40,8 @@ const API = {
   async setIgnores(id, ignores) {
     return this.stFetch(`/rest/db/ignores?folder=${encodeURIComponent(id)}`, 'POST', ignores);
   },
-  async pauseFolder(id, paused) {
-    return this.sideFetch('/api/pause-folder', 'POST', { folderId: id, paused });
+  async pauseFolder(id, paused, autoUpgrade = false) {
+    return this.sideFetch('/api/pause-folder', 'POST', { folderId: id, paused, autoUpgrade });
   },
 
   // ===== Sidecar API =====

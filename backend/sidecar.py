@@ -1511,6 +1511,7 @@ class SidecarHandler(BaseHTTPRequestHandler):
         elif path == "/api/pause-folder":
             folder_id = body.get("folderId", "")
             paused = body.get("paused", True)
+            auto_upgrade = body.get("autoUpgrade", False)
             config = syncthing_api("GET", "/rest/config")
             if config:
                 folder_cfg = None
@@ -1523,7 +1524,7 @@ class SidecarHandler(BaseHTTPRequestHandler):
                 self.send_json({"success": True})
 
                 # 恢复 receiveonly 文件夹时，后台等同步完成后自动切回 sendreceive
-                if not paused and folder_cfg and folder_cfg.get("type") == "receiveonly":
+                if not paused and auto_upgrade and folder_cfg and folder_cfg.get("type") == "receiveonly":
                     def auto_upgrade_to_sendreceive():
                         import urllib.parse
                         encoded_id = urllib.parse.quote(folder_id, safe='')
