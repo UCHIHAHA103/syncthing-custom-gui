@@ -124,6 +124,36 @@ const app = {
         }
       }
     }));
+
+    // 忽略列表拖拽
+    const idz = document.getElementById('ignoreDropZone');
+    ['dragenter', 'dragover'].forEach(e => idz.addEventListener(e, ev => { ev.preventDefault(); ev.stopPropagation(); idz.classList.add('active'); }));
+    ['dragleave', 'drop'].forEach(e => idz.addEventListener(e, ev => {
+      ev.preventDefault(); ev.stopPropagation(); idz.classList.remove('active');
+      if (e === 'drop') {
+        const items = ev.dataTransfer.items || [];
+        const files = ev.dataTransfer.files || [];
+        for (let i = 0; i < (items.length || files.length); i++) {
+          let name = '';
+          if (items[i]?.webkitGetAsEntry) {
+            const entry = items[i].webkitGetAsEntry();
+            name = entry ? entry.name : '';
+          } else if (files[i]) {
+            name = files[i].name;
+          }
+          if (name) {
+            // 获取文件夹路径：如果选中了文件夹，先检查是否有选中的同步文件夹
+            const folder = this.selectedFolder;
+            if (folder) {
+              // 用相对路径添加到忽略/白名单
+              const path = name.replace(/^\//, '');
+              console.log(`[ignoreDrop] adding: ${path}, whitelist: ${this._folderWhitelistMode}`);
+              this.addIgnoreFromBrowser(path);
+            }
+          }
+        }
+      }
+    }));
   },
 
   async refresh() {
@@ -731,7 +761,6 @@ const app = {
         <button onclick="app.addIgnoreRule('${type}',this.previousElementSibling)">+</button>
         ${browseBtn}
       </div>
-      <div class="ignore-browser" id="ignoreBrowser" style="display:none"></div>
     `;
   },
 

@@ -356,6 +356,18 @@ body {
 }
 .ignore-browser-item:hover { background: var(--surface-2); }
 
+.ignore-drop-zone {
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  padding: 10px; text-align: center;
+  margin: 6px 0; transition: all 0.2s;
+  font-size: 10px; color: var(--text-dim);
+}
+.ignore-drop-zone.active {
+  border-color: var(--accent); background: var(--accent-dim);
+  color: var(--accent);
+}
+
 /* 备注 */
 .note-area {
   width: 100%; background: var(--surface-2);
