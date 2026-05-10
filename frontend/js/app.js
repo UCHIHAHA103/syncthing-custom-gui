@@ -675,35 +675,57 @@ const app = {
         }
       }
       console.log(`[loadFolderIgnores] ${id}: ${filtered.length} filtered rules`);
-      block.innerHTML = this.renderIgnoreBlock(filtered, 'folder');
+      // 检测白名单模式：最后一条规则是 * 且有 ! 开头的规则
+      const isWhitelist = filtered.length > 0 && filtered[filtered.length - 1].trim() === '*'
+                          && filtered.some(r => r.trim().startsWith('!'));
+      this._folderWhitelistMode = isWhitelist;
+      // 白名单模式下，显示 ! 规则（去掉前缀），隐藏末尾的 *
+      let displayRules = filtered;
+      if (isWhitelist) {
+        displayRules = filtered.filter(r => r.trim() !== '*').map(r => {
+          const t = r.trim();
+          return t.startsWith('!') ? t.slice(1) : t;
+        });
+      }
+      block.innerHTML = this.renderIgnoreBlock(displayRules, 'folder', isWhitelist);
     } catch (e) {
       console.error(`[loadFolderIgnores] ${id}: error:`, e);
       block.innerHTML = '<div class="ignore-empty">无法加载</div>';
     }
   },
 
-  renderIgnoreBlock(rules, type) {
+  renderIgnoreBlock(rules, type, isWhitelist = false) {
     const headerLabel = type === 'global' ? '.stglobalignore' : '.stignore';
+    const modeToggle = type === 'folder' ? `
+      <label style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text-dim);cursor:pointer;margin-left:auto">
+        <input type="checkbox" ${isWhitelist ? 'checked' : ''} onchange="app.toggleWhitelistMode(this.checked)">
+        白名单模式
+      </label>
+    ` : '';
     let body = '';
     if (rules.length === 0) {
-      body = '<div class="ignore-empty">暂无规则</div>';
+      body = `<div class="ignore-empty">${isWhitelist ? '白名单为空，将忽略所有文件' : '暂无规则'}</div>`;
     } else {
       body = rules.map((r, i) => `
         <div class="ignore-line">
-          <button class="ignore-toggle on">+</button>
+          <button class="ignore-toggle on" style="color:${isWhitelist ? 'var(--green)' : 'var(--red)'}">
+            ${isWhitelist ? '✓' : '×'}
+          </button>
           <span class="line-text">${r}</span>
           <span class="line-del" onclick="app.removeIgnoreRule('${type}', ${i})">x</span>
         </div>
       `).join('');
     }
+    const placeholder = isWhitelist ? '添加要同步的路径...' : '添加规则...';
     return `
       <div class="ignore-block-header">
         <span>${headerLabel}</span>
+        ${modeToggle}
         <span class="edit-link">编辑</span>
       </div>
       <div class="ignore-block-body">${body}</div>
       <div class="ignore-add-row">
-        <input type="text" placeholder="添加规则..." onkeydown="if(event.key==='Enter')app.addIgnoreRule('${type}',this)">
+        <input type="text" placeholder="${placeholder}" onkeydown="if(event.key==='Enter')app.addIgnoreRule('${type}',this)">
         <button onclick="app.addIgnoreRule('${type}',this.previousElementSibling)">+</button>
       </div>
     `;
@@ -726,7 +748,19 @@ const app = {
     } else if (this.selectedFolder) {
       const data = await API.getIgnores(this.selectedFolder.id);
       const ignores = data.ignore || [];
-      ignores.push(rule);
+      if (this._folderWhitelistMode) {
+        // 白名单模式：在 * 之前插入 !rule
+        const starIdx = ignores.lastIndexOf('*');
+        const newRule = rule.startsWith('!') ? rule : `!${rule}`;
+        if (starIdx >= 0) {
+          ignores.splice(starIdx, 0, newRule);
+        } else {
+          ignores.push(newRule);
+          ignores.push('*');
+        }
+      } else {
+        ignores.push(rule);
+      }
       await API.setIgnores(this.selectedFolder.id, { ignore: ignores, patterns: data.patterns || [] });
       this.loadFolderIgnores(this.selectedFolder.id);
     }
@@ -740,13 +774,70 @@ const app = {
     } else if (this.selectedFolder) {
       const data = await API.getIgnores(this.selectedFolder.id);
       const ignores = data.ignore || [];
+      // 过滤掉全局注入段
       const filtered = ignores.filter(l =>
         l.trim() && !l.startsWith('// --- GLOBAL')
       );
-      filtered.splice(index, 1);
+      if (this._folderWhitelistMode) {
+        // 白名单模式下，index 对应的是 ! 规则（不含末尾 *）
+        const whiteRules = filtered.filter(r => r.trim().startsWith('!'));
+        if (index < whiteRules.length) {
+          const ruleToRemove = whiteRules[index];
+          const realIdx = filtered.indexOf(ruleToRemove);
+          if (realIdx >= 0) filtered.splice(realIdx, 1);
+        }
+        // 如果白名单清空了，也移除末尾 *，回到普通模式
+        if (!filtered.some(r => r.trim().startsWith('!'))) {
+          const starIdx = filtered.lastIndexOf('*');
+          if (starIdx >= 0) filtered.splice(starIdx, 1);
+        }
+      } else {
+        filtered.splice(index, 1);
+      }
       await API.setIgnores(this.selectedFolder.id, { ignore: filtered, patterns: data.patterns || [] });
       this.loadFolderIgnores(this.selectedFolder.id);
     }
+  },
+
+  async toggleWhitelistMode(enabled) {
+    if (!this.selectedFolder) return;
+    const fid = this.selectedFolder.id;
+    const data = await API.getIgnores(fid);
+    let ignores = data.ignore || [];
+    // 过滤掉全局注入段
+    let inGlobal = false;
+    const userRules = [];
+    const globalRules = [];
+    for (const line of ignores) {
+      if (line.includes('GLOBAL IGNORE START')) { inGlobal = true; globalRules.push(line); continue; }
+      if (line.includes('GLOBAL IGNORE END')) { inGlobal = false; globalRules.push(line); continue; }
+      if (inGlobal) { globalRules.push(line); continue; }
+      userRules.push(line);
+    }
+
+    let newUserRules = [];
+    if (enabled) {
+      // 切换到白名单模式：把现有黑名单规则转为白名单（反转）
+      // 清空现有规则，添加 * 作为"忽略所有"
+      newUserRules = ['// 白名单模式：只同步以 ! 开头的路径', '*'];
+    } else {
+      // 切换到黑名单模式：移除末尾 *，把 ! 规则转为普通规则（可选）
+      for (const r of userRules) {
+        const t = r.trim();
+        if (t === '*') continue;
+        if (t.startsWith('//') && t.includes('白名单')) continue;
+        if (t.startsWith('!')) {
+          // 白名单规则不自动转黑名单，直接丢弃
+          continue;
+        }
+        newUserRules.push(r);
+      }
+    }
+
+    const finalIgnores = [...globalRules, ...newUserRules];
+    await API.setIgnores(fid, { ignore: finalIgnores, patterns: data.patterns || [] });
+    console.log(`[toggleWhitelistMode] ${fid}: whitelist=${enabled}, rules=${newUserRules.length}`);
+    this.loadFolderIgnores(fid);
   },
 
   async loadFolderDetail(id) {
