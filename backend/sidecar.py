@@ -685,6 +685,14 @@ def apply_ignore_rules_to_folders():
         except Exception as e:
             print(f"[ignore-rules] Failed to write {fid}/.stignore: {e}")
 
+        # 确保 .sync-ignore 存在（#include 依赖它，不存在会导致 Syncthing 报错）
+        if not sync_ignore_path.exists():
+            try:
+                sync_ignore_path.write_text("// 同步忽略规则 - mode: blacklist\n", encoding="utf-8")
+                print(f"[ignore-rules] Created empty .sync-ignore for {fid}")
+            except Exception as e:
+                print(f"[ignore-rules] Failed to create .sync-ignore for {fid}: {e}")
+
         # 2. 构建 .sync-ignore（文件夹专属规则，会被 Syncthing 同步到所有设备）
         fr = folder_rules.get(fid)
         if fr:
@@ -717,7 +725,10 @@ def apply_ignore_rules_to_folders():
 
 
 def ensure_stignore_includes():
-    """确保所有存在 .sync-ignore 的文件夹的 .stignore 里有 #include .sync-ignore"""
+    """确保所有文件夹：
+    1. .sync-ignore 文件存在（不存在就创建空文件，避免 Syncthing #include 报错）
+    2. .stignore 里有 #include .sync-ignore
+    """
     config = syncthing_api("GET", "/rest/config")
     if not config:
         return
@@ -727,8 +738,14 @@ def ensure_stignore_includes():
         if not folder_path or not os.path.isdir(folder_path):
             continue
         sync_ignore = Path(folder_path) / ".sync-ignore"
+        # 确保 .sync-ignore 文件存在（#include 依赖它）
         if not sync_ignore.exists():
-            continue
+            try:
+                sync_ignore.write_text("// 同步忽略规则 - mode: blacklist\n", encoding="utf-8")
+                print(f"[ignore-rules] Created empty .sync-ignore for {fid}")
+            except Exception as e:
+                print(f"[ignore-rules] Failed to create .sync-ignore for {fid}: {e}")
+                continue
         # 通过 Syncthing API 读取当前忽略规则
         import urllib.parse
         encoded_id = urllib.parse.quote(fid, safe='')
