@@ -260,6 +260,19 @@ def transfer_event_watcher():
         pass
     print("[transfer-log] event watcher started")
 
+    # 缓存设备名称映射
+    _device_names = {}
+    def _get_device_name(device_id):
+        if not device_id:
+            return ""
+        short = device_id[:7]
+        if short not in _device_names:
+            config = syncthing_api("GET", "/rest/config/devices")
+            if config:
+                for d in config:
+                    _device_names[d["deviceID"][:7]] = d.get("name", d["deviceID"][:7])
+        return _device_names.get(short, short)
+
     while True:
         try:
             evs = syncthing_api("GET", f"/rest/events?since={since}&limit=100&timeout=10")
@@ -292,9 +305,10 @@ def transfer_event_watcher():
                 elif etype == "FolderCompletion" and folder:
                     comp = data.get("completion", 0)
                     need = data.get("needBytes", 0)
-                    device = data.get("device", "")[:7]
+                    device = data.get("device", "")
+                    dev_name = _get_device_name(device)
                     _log_transfer_event(folder, "(completion)", ev_time, "Completion",
-                                        f"device={device} comp={comp:.1f}% needBytes={need}")
+                                        f"→{dev_name} comp={comp:.1f}% needBytes={need}")
 
                 elif etype == "StateChanged" and folder:
                     _log_transfer_event(folder, "(state)", ev_time, "StateChanged",
@@ -1113,6 +1127,16 @@ class SidecarHandler(BaseHTTPRequestHandler):
                 self.send_json(result)
             else:
                 self.send_json({"error": "需要 folderId 和 newPath"}, 400)
+
+        elif path == "/api/transfer-log":
+            # POST: 写入自定义日志（前端配置变更等）
+            msg = body.get("message", "")
+            detail = body.get("detail", "")
+            if msg:
+                _log_transfer_event("(system)", "(config)", time.strftime("%Y-%m-%dT%H:%M:%S"), msg, detail)
+                self.send_json({"success": True})
+            else:
+                self.send_json({"error": "需要 message"}, 400)
 
         elif path == "/api/pause-folder":
             folder_id = body.get("folderId", "")

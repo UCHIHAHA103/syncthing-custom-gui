@@ -1327,6 +1327,10 @@ const app = {
     try {
       const config = await API.getConfig();
       if (cloudEnabled && cloudDeviceId) {
+        // 记录开启日志
+        if (!prevEnabled) {
+          API.sideFetch('/api/transfer-log', 'POST', { message: '云服务器已开启', detail: `device=${cloudName} addr=${cloudAddress}` }).catch(() => {});
+        }
         // 添加云服务器设备（如果不存在）
         const exists = config.devices.some(d => d.deviceID === cloudDeviceId);
         if (!exists) {
@@ -1353,6 +1357,7 @@ const app = {
         }
         config.devices = config.devices.filter(d => d.deviceID !== prevDeviceId);
         console.log('[settings] cloud server device removed');
+        API.sideFetch('/api/transfer-log', 'POST', { message: '云服务器已关闭', detail: '回退到 NAS 直连/中继' }).catch(() => {});
       }
       await API.setConfig(config);
     } catch (e) {
