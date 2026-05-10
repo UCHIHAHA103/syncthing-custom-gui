@@ -1172,7 +1172,8 @@ class SidecarHandler(BaseHTTPRequestHandler):
         elif path == "/api/open-in-explorer":
             folder_path = body.get("path", "")
             if folder_path and os.path.exists(folder_path):
-                os.startfile(folder_path)
+                import subprocess
+                subprocess.Popen(f'start "" "{folder_path}"', shell=True)
                 self.send_json({"success": True})
             else:
                 self.send_json({"error": "路径不存在"}, 400)
