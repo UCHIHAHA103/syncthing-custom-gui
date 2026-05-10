@@ -707,6 +707,36 @@ def apply_ignore_rules_to_folders():
     print(f"[ignore-rules] Applied rules to {len(config.get('folders', []))} folders")
 
 
+def ensure_stignore_includes():
+    """确保所有存在 .sync-ignore 的文件夹的 .stignore 里有 #include .sync-ignore"""
+    config = syncthing_api("GET", "/rest/config")
+    if not config:
+        return
+    for folder in config.get("folders", []):
+        folder_path = folder.get("path", "")
+        if not folder_path or not os.path.isdir(folder_path):
+            continue
+        sync_ignore = Path(folder_path) / ".sync-ignore"
+        stignore = Path(folder_path) / ".stignore"
+        if not sync_ignore.exists():
+            continue
+        # 检查 .stignore 是否已有 #include
+        include_line = "#include .sync-ignore"
+        if stignore.exists():
+            content = stignore.read_text(encoding="utf-8")
+            if include_line in content:
+                continue
+            # 追加 #include
+            if not content.endswith("\n"):
+                content += "\n"
+            content += include_line + "\n"
+            stignore.write_text(content, encoding="utf-8")
+        else:
+            # 创建 .stignore
+            stignore.write_text(include_line + "\n", encoding="utf-8")
+        print(f"[ignore-rules] Added #include to {folder.get('id', '')}/.stignore")
+
+
 def sync_global_ignore_to_folders():
     """将集中式忽略规则同步到所有文件夹的 .stignore"""
     apply_ignore_rules_to_folders()
@@ -1565,12 +1595,14 @@ def main():
         time.sleep(10)
         print("[ignore-rules] watcher started")
         apply_ignore_rules_to_folders()  # 启动时立即应用一次
+        ensure_stignore_includes()  # 确保所有有 .sync-ignore 的文件夹都有 #include
         while True:
             try:
                 apply_ignore_rules_to_folders()  # 内部检查 mtime，无变化时跳过
+                ensure_stignore_includes()  # 检查新同步过来的 .sync-ignore
             except Exception as e:
                 print(f"[ignore-rules] watcher error: {e}")
-            time.sleep(30)  # 每 30 秒检查一次 JSON 是否被修改
+            time.sleep(30)  # 每 30 秒检查一次
 
     ignore_thread = threading.Thread(target=ignore_rules_watcher, daemon=True)
     ignore_thread.start()
