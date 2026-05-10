@@ -161,7 +161,6 @@ const app = {
         });
       }
       this.loadFolderIgnores(this.selectedFolder.id);
-      this.saveFolderRulesToJson(this.selectedFolder.id);
     });
   },
 
@@ -818,64 +817,6 @@ const app = {
     block.innerHTML = this.renderIgnoreBlock(this.globalIgnore, 'global');
   },
 
-  async saveFolderRulesToJson(folderId) {
-    // 从 .sync-ignore 文件直接读取规则，保存到集中式 JSON
-    // 不从 Syncthing API 读（API 返回展开后的合并规则，容易混入脏数据）
-    try {
-      const folder = this.folders.find(f => f.id === folderId) || this.selectedFolder;
-      const folderPath = folder?.path;
-      let userRules = [];
-
-      if (folderPath && this.sidecarOk) {
-        const sep = folderPath.includes('/') ? '/' : '\\';
-        const syncIgnorePath = `${folderPath}${sep}.sync-ignore`;
-        const resp = await API.sideFetch(`/api/read-file?path=${encodeURIComponent(syncIgnorePath)}`);
-        if (resp && resp.content !== undefined) {
-          const lines = resp.content.split('\n');
-          for (const line of lines) {
-            const t = line.trim();
-            if (!t || t.startsWith('//') || t.startsWith('#include')) continue;
-            userRules.push(t);
-          }
-        }
-      }
-
-      if (userRules.length === 0) {
-        // fallback: 从 Syncthing API 读（过滤更严格）
-        const data = await API.getIgnores(folderId);
-        const ignores = data.ignore || [];
-        let inManaged = false;
-        for (const line of ignores) {
-          if (line.includes('GLOBAL IGNORE START') || line.includes('FOLDER RULES START')) { inManaged = true; continue; }
-          if (line.includes('GLOBAL IGNORE END') || line.includes('FOLDER RULES END')) { inManaged = false; continue; }
-          if (inManaged) continue;
-          const t = line.trim();
-          if (!t || t.startsWith('//') || t.startsWith('#include')) continue;
-          userRules.push(t);
-        }
-      }
-
-      // 判断模式
-      const lastIsStar = userRules.length > 0 && userRules[userRules.length - 1] === '*';
-      const hasWhite = userRules.some(r => r.startsWith('!'));
-      const isWhitelist = lastIsStar && (hasWhite || userRules.length === 1);
-      let mode, rules;
-      if (isWhitelist) {
-        mode = 'whitelist';
-        rules = userRules.filter(r => r.startsWith('!')).map(r => r.replace(/^!\//, '').replace(/^!/, ''));
-      } else {
-        mode = 'blacklist';
-        rules = userRules.filter(r => r !== '*');
-      }
-      if (rules.length > 0 || isWhitelist) {
-        await API.sideFetch('/api/folder-ignore-rules', 'POST', { folderId, mode, rules });
-      }
-      console.log(`[saveFolderRulesToJson] ${folderId}: mode=${mode}, rules=${JSON.stringify(rules)}`);
-    } catch (e) {
-      console.error('[saveFolderRulesToJson] error:', e);
-    }
-  },
-
   async addIgnoreRule(type, input) {
     const rule = input.value.trim();
     if (!rule) return;
@@ -895,7 +836,6 @@ const app = {
         whitelist: this._folderWhitelistMode
       });
       await this.loadFolderIgnores(this.selectedFolder.id);
-      await this.saveFolderRulesToJson(this.selectedFolder.id);
     }
   },
 
@@ -913,7 +853,6 @@ const app = {
         whitelist: this._folderWhitelistMode
       });
       await this.loadFolderIgnores(this.selectedFolder.id);
-      await this.saveFolderRulesToJson(this.selectedFolder.id);
     }
   },
 
@@ -996,7 +935,6 @@ const app = {
     await API.setIgnores(fid, { ignore: finalIgnores, patterns: data.patterns || [] });
     console.log(`[toggleWhitelistMode] ${fid}: whitelist=${enabled}, rules=${newUserRules.length}`);
     this.loadFolderIgnores(fid);
-    this.saveFolderRulesToJson(fid);
   },
 
   async showIgnoreBrowser(subpath = '') {
@@ -1106,7 +1044,6 @@ const app = {
       whitelist: this._folderWhitelistMode
     });
     await this.loadFolderIgnores(this.selectedFolder.id);
-    await this.saveFolderRulesToJson(this.selectedFolder.id);
     // 刷新浏览器标记已添加
     const items = document.querySelectorAll('.ignore-browser-item');
     items.forEach(el => {

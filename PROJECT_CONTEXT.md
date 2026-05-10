@@ -59,8 +59,7 @@ d:\TRAE\github\syncthing-custom-gui\
 ├── backend/
 │   └── sidecar.py     # Python sidecar 服务 (端口 8385)
 ├── config/
-│   ├── ignore-rules.json    # 集中式忽略规则 (通过 git 同步)
-│   └── global-ignore.txt    # 旧版全局忽略 (兼容)
+│   └── global-ignore.txt    # 全局忽略规则
 └── start.ps1          # 启动脚本
 ```
 
