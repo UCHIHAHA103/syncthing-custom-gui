@@ -364,23 +364,34 @@ const app = {
       const isCloud = cloudEnabled && dev.deviceID === cloudDeviceId;
       const meta = connections ? (connected ? (type.includes('relay') ? 'Relay' : type.replace('-', ' ')) : '离线') : '--';
       const dotColor = connected ? (type.includes('relay') ? 'orange' : 'green') : 'text-dim';
-      newDeviceData.push({ id: dev.deviceID, name: isCloud ? `☁ ${name}` : name, meta, dotColor, isCloud });
+      newDeviceData.push({ id: dev.deviceID, name, meta, dotColor, isCloud });
     }
 
-    // 生成签名比较，避免无变化时重建 DOM
-    const sig = JSON.stringify(newDeviceData);
-    if (this._deviceSig === sig) return;
-    this._deviceSig = sig;
-
-    let html = '';
-    for (const d of newDeviceData) {
-      html += `<div class="device-item">
-        <span class="device-dot" style="background:var(--${d.dotColor})"></span>
-        <span class="device-name">${d.name}</span>
-        <span class="device-meta">${d.meta}</span>
-      </div>`;
+    // 局部更新：只在结构变化时重建 DOM，否则只更新变化的属性
+    const structSig = newDeviceData.map(d => d.id).join(',');
+    if (this._deviceStructSig !== structSig) {
+      // 设备列表结构变化，重建 DOM
+      this._deviceStructSig = structSig;
+      let html = '';
+      for (const d of newDeviceData) {
+        html += `<div class="device-item" data-device="${d.id}">
+          <span class="device-dot" style="background:var(--${d.dotColor})"></span>
+          <span class="device-name">${d.name}</span>
+          <span class="device-meta">${d.meta}</span>
+        </div>`;
+      }
+      list.innerHTML = html || '<div style="font-size:10px;color:var(--text-dim);padding:6px 10px">无设备</div>';
+    } else {
+      // 结构没变，局部更新状态
+      for (const d of newDeviceData) {
+        const el = list.querySelector(`[data-device="${d.id}"]`);
+        if (!el) continue;
+        const dot = el.querySelector('.device-dot');
+        const meta = el.querySelector('.device-meta');
+        if (dot) dot.style.background = `var(--${d.dotColor})`;
+        if (meta && meta.textContent !== d.meta) meta.textContent = d.meta;
+      }
     }
-    list.innerHTML = html || '<div style="font-size:10px;color:var(--text-dim);padding:6px 10px">无设备</div>';
   },
 
   async renderFolders() {
@@ -1522,7 +1533,7 @@ const app = {
     // 检查云服务器是否已在设备列表中
     const cloudDevice = cloudDeviceId ? this.devices.find(d => d.deviceID === cloudDeviceId) : null;
     const cloudConn = this.connections?.connections?.[cloudDeviceId];
-    const cloudStatus = cloudDevice ? (cloudConn?.connected ? '✅ 已连接' : '❌ 离线') : '未添加';
+    const cloudStatus = cloudDevice ? (cloudConn?.connected ? '已连接' : '离线') : '未添加';
 
     document.getElementById('modalTitle').textContent = '设置';
     document.getElementById('modalBody').innerHTML = `
