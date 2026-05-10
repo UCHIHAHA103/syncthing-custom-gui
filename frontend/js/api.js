@@ -78,4 +78,10 @@ const API = {
   async browseDir(path) {
     return this.sideFetch(`/api/browse-dir?path=${encodeURIComponent(path || '')}`);
   },
+  async getTransferLog(folder, limit = 100) {
+    const params = new URLSearchParams();
+    if (folder) params.set('folder', folder);
+    params.set('limit', limit);
+    return this.sideFetch(`/api/transfer-log?${params}`);
+  },
 };

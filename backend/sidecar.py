@@ -238,6 +238,99 @@ def file_change_watcher():
         time.sleep(3)
 
 
+
+
+# ===== 文件传输日志系统 =====
+_transfer_log = []  # [{file, folder, events: [{time, event, detail}]}]
+_transfer_log_lock = threading.Lock()
+MAX_TRANSFER_LOG = 200  # 最多保留 200 条记录
+
+
+def transfer_event_watcher():
+    """后台线程：监听 Syncthing Events，记录文件级传输时间线"""
+    import urllib.parse
+    time.sleep(5)  # 等 Syncthing 启动
+    since = 0
+    # 获取当前最新 event ID（跳过历史）
+    try:
+        evs = syncthing_api("GET", "/rest/events?since=0&limit=1&timeout=1")
+        if evs and len(evs) > 0:
+            since = evs[-1]["id"]
+    except Exception:
+        pass
+    print("[transfer-log] event watcher started")
+
+    while True:
+        try:
+            evs = syncthing_api("GET", f"/rest/events?since={since}&limit=100&timeout=10")
+            if not evs:
+                time.sleep(2)
+                continue
+            since = evs[-1]["id"]
+            now_str = time.strftime("%H:%M:%S")
+
+            for ev in evs:
+                etype = ev.get("type", "")
+                data = ev.get("data", {})
+                folder = data.get("folder", "")
+                item = data.get("item", "")
+                ev_time = ev.get("time", "")[:19]  # ISO format truncated
+
+                if etype == "LocalIndexUpdated" and folder:
+                    _log_transfer_event(folder, "(index)", ev_time, "LocalIndexUpdated",
+                                        f"items={data.get('items', 0)}")
+
+                elif etype == "ItemStarted" and item:
+                    _log_transfer_event(folder, item, ev_time, "Started",
+                                        f"action={data.get('action','')} type={data.get('type','')}")
+
+                elif etype == "ItemFinished" and item:
+                    err = data.get("error", "")
+                    _log_transfer_event(folder, item, ev_time, "Finished",
+                                        f"action={data.get('action','')} error={err}" if err else f"action={data.get('action','')}")
+
+                elif etype == "FolderCompletion" and folder:
+                    comp = data.get("completion", 0)
+                    need = data.get("needBytes", 0)
+                    device = data.get("device", "")[:7]
+                    _log_transfer_event(folder, "(completion)", ev_time, "Completion",
+                                        f"device={device} comp={comp:.1f}% needBytes={need}")
+
+                elif etype == "StateChanged" and folder:
+                    _log_transfer_event(folder, "(state)", ev_time, "StateChanged",
+                                        f"{data.get('from','')} -> {data.get('to','')}")
+
+                elif etype == "FolderScanProgress" and folder:
+                    cur = data.get("current", 0)
+                    tot = data.get("total", 0)
+                    rate = data.get("rate", 0)
+                    if tot > 0:
+                        pct = round(cur / tot * 100)
+                        _log_transfer_event(folder, "(scan)", ev_time, "ScanProgress",
+                                            f"{pct}% rate={rate}")
+
+        except Exception as e:
+            if "timed out" not in str(e).lower():
+                pass  # 安静处理超时
+        time.sleep(1)
+
+
+def _log_transfer_event(folder, item, ev_time, event_type, detail=""):
+    """记录一条传输事件"""
+    with _transfer_log_lock:
+        entry = {
+            "time": ev_time,
+            "folder": folder,
+            "item": item,
+            "event": event_type,
+            "detail": detail,
+        }
+        _transfer_log.append(entry)
+        # 限制大小
+        if len(_transfer_log) > MAX_TRANSFER_LOG:
+            _transfer_log[:] = _transfer_log[-MAX_TRANSFER_LOG:]
+
+
 def nas_api(method, endpoint, data=None):
     """通过 SSH 调用 NAS 上的 Syncthing API"""
     if not NAS_SSH_OK:
@@ -660,6 +753,17 @@ class SidecarHandler(BaseHTTPRequestHandler):
             # 直接返回 NAS 状态缓存（毫秒级响应）
             with _nas_status_lock:
                 self.send_json(_nas_status_cache)
+
+        elif path == "/api/transfer-log":
+            # 返回文件传输时间线日志
+            params = parse_qs(parsed.query)
+            folder_filter = params.get("folder", [""])[0]
+            limit = int(params.get("limit", ["50"])[0])
+            with _transfer_log_lock:
+                logs = list(_transfer_log)
+            if folder_filter:
+                logs = [l for l in logs if l["folder"] == folder_filter]
+            self.send_json({"logs": logs[-limit:], "total": len(logs)})
 
         elif path == "/api/local-folder-status":
             # 轻量级：检查本地所有文件夹路径是否存在（不走 SSH）
@@ -1171,6 +1275,10 @@ def main():
     # 启动 NAS 文件夹自动共享线程（确保新文件夹共享给所有设备）
     share_thread = threading.Thread(target=nas_auto_share, daemon=True)
     share_thread.start()
+
+    # 启动传输日志监控线程
+    transfer_log_thread = threading.Thread(target=transfer_event_watcher, daemon=True)
+    transfer_log_thread.start()
 
     server = ThreadingHTTPServer(("127.0.0.1", SIDECAR_PORT), SidecarHandler)
     print(f"[sidecar] 扩展服务启动: http://127.0.0.1:{SIDECAR_PORT}")

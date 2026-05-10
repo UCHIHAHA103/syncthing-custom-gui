@@ -91,6 +91,10 @@ const app = {
       btn.onclick = () => {
         document.querySelectorAll('.titlebar-nav button').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
+        const view = btn.dataset.view;
+        if (view === 'log') {
+          this.showTransferLog();
+        }
       };
     });
 
@@ -1362,6 +1366,40 @@ const app = {
 
   resolveConflicts() {
     window.open('http://127.0.0.1:8384', '_blank');
+  },
+
+  async showTransferLog() {
+    const list = document.getElementById('folderList');
+    list.innerHTML = '<div style="padding:12px;color:var(--text-dim);font-size:11px">加载传输日志...</div>';
+    try {
+      const data = await API.getTransferLog(null, 100);
+      const logs = data?.logs || [];
+      if (logs.length === 0) {
+        list.innerHTML = '<div style="padding:12px;color:var(--text-dim);font-size:11px">暂无传输记录（等待文件变化后自动记录）</div>';
+        return;
+      }
+      let html = '<div style="padding:8px 12px;font-size:10px;font-family:monospace;line-height:1.8;overflow-y:auto;max-height:calc(100vh - 120px)">';
+      html += `<div style="color:var(--text-dim);margin-bottom:8px">共 ${data.total} 条记录（显示最近 ${logs.length} 条）</div>`;
+      for (const l of logs.reverse()) {
+        const color = l.event === 'Finished' ? 'var(--green)' :
+                      l.event === 'Started' ? 'var(--accent)' :
+                      l.event === 'Completion' ? 'var(--orange)' :
+                      l.event === 'StateChanged' ? 'var(--text-dim)' :
+                      'var(--text-muted)';
+        const itemDisplay = l.item && !l.item.startsWith('(') ? l.item.split('/').pop() : l.item;
+        html += `<div style="border-bottom:1px solid var(--surface-2);padding:2px 0">`;
+        html += `<span style="color:var(--text-dim)">${l.time}</span> `;
+        html += `<span style="color:var(--accent)">[${l.folder}]</span> `;
+        html += `<span style="color:${color};font-weight:500">${l.event}</span> `;
+        html += `<span style="color:var(--text)">${itemDisplay}</span>`;
+        if (l.detail) html += ` <span style="color:var(--text-dim)">${l.detail}</span>`;
+        html += `</div>`;
+      }
+      html += '</div>';
+      list.innerHTML = html;
+    } catch (e) {
+      list.innerHTML = `<div style="padding:12px;color:var(--red);font-size:11px">加载失败: ${e.message}</div>`;
+    }
   },
 
   dismissAlert() {
