@@ -349,6 +349,13 @@ body {
 
 .ignore-empty { font-size: 10px; color: var(--text-dim); padding: 8px 10px; }
 
+.ignore-browser {
+  max-height: 200px; overflow-y: auto;
+  border-top: 1px solid var(--border);
+  background: var(--surface-1);
+}
+.ignore-browser-item:hover { background: var(--surface-2); }
+
 /* 备注 */
 .note-area {
   width: 100%; background: var(--surface-2);

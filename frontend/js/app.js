@@ -718,6 +718,7 @@ const app = {
       `).join('');
     }
     const placeholder = isWhitelist ? '添加要同步的路径...' : '添加规则...';
+    const browseBtn = type === 'folder' ? `<button onclick="app.showIgnoreBrowser()" title="从文件夹内容中选择" style="font-size:11px">📂</button>` : '';
     return `
       <div class="ignore-block-header">
         <span>${headerLabel}</span>
@@ -728,7 +729,9 @@ const app = {
       <div class="ignore-add-row">
         <input type="text" placeholder="${placeholder}" onkeydown="if(event.key==='Enter')app.addIgnoreRule('${type}',this)">
         <button onclick="app.addIgnoreRule('${type}',this.previousElementSibling)">+</button>
+        ${browseBtn}
       </div>
+      <div class="ignore-browser" id="ignoreBrowser" style="display:none"></div>
     `;
   },
 
@@ -875,6 +878,106 @@ const app = {
     await API.setIgnores(fid, { ignore: finalIgnores, patterns: data.patterns || [] });
     console.log(`[toggleWhitelistMode] ${fid}: whitelist=${enabled}, rules=${newUserRules.length}`);
     this.loadFolderIgnores(fid);
+  },
+
+  async showIgnoreBrowser(subpath = '') {
+    if (!this.selectedFolder) return;
+    const fid = this.selectedFolder.id;
+    const browser = document.getElementById('ignoreBrowser');
+    if (!browser) return;
+    browser.style.display = 'block';
+    browser.innerHTML = '<div style="color:var(--text-dim);font-size:11px;padding:6px">加载中...</div>';
+    try {
+      const prefix = subpath ? `&prefix=${encodeURIComponent(subpath)}` : '';
+      const data = await API.stFetch(`/rest/db/browse?folder=${encodeURIComponent(fid)}&levels=1${prefix}`);
+      // data is array of objects: [{name, type: "FILE_INFO_TYPE_FILE"|"FILE_INFO_TYPE_DIRECTORY", ...}]
+      // or for levels=1: nested object {name: [children]} or flat array
+      let items = [];
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          if (typeof entry === 'string') {
+            items.push({ name: entry, isDir: entry.endsWith('/') });
+          } else if (entry.name) {
+            items.push({ name: entry.name, isDir: entry.type === 'FILE_INFO_TYPE_DIRECTORY' || entry.name.endsWith('/') });
+          } else {
+            // {dirName: [...]} format
+            for (const [key, val] of Object.entries(entry)) {
+              items.push({ name: key, isDir: Array.isArray(val) });
+            }
+          }
+        }
+      } else if (typeof data === 'object') {
+        for (const [key, val] of Object.entries(data)) {
+          items.push({ name: key, isDir: Array.isArray(val) || (typeof val === 'object' && val !== null) });
+        }
+      }
+      // 排序：目录在前
+      items.sort((a, b) => (b.isDir - a.isDir) || a.name.localeCompare(b.name));
+      const isWhitelist = this._folderWhitelistMode;
+      const actionLabel = isWhitelist ? '加入白名单' : '忽略';
+      const actionColor = isWhitelist ? 'var(--green)' : 'var(--red)';
+      let html = `<div style="font-size:10px;color:var(--text-dim);padding:4px 6px;border-bottom:1px solid var(--surface-3)">
+        ${subpath ? `<span style="cursor:pointer;color:var(--accent)" onclick="app.showIgnoreBrowser('')">⬅ 根目录</span> / ` : ''}
+        <span>${subpath || fid}</span>
+        <span style="float:right;cursor:pointer" onclick="document.getElementById('ignoreBrowser').style.display='none'">✕</span>
+      </div>`;
+      if (items.length === 0) {
+        html += '<div style="color:var(--text-dim);font-size:11px;padding:6px">空文件夹</div>';
+      } else {
+        html += items.slice(0, 100).map(item => {
+          const icon = item.isDir ? '📁' : '📄';
+          const path = subpath ? `${subpath}${item.name}` : item.name;
+          const displayName = item.name.replace(/\/$/, '');
+          const drillDown = item.isDir ? `onclick="app.showIgnoreBrowser('${path.replace(/'/g, "\\'")}')"` : '';
+          return `<div class="ignore-browser-item" style="display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:11px;cursor:pointer;border-bottom:1px solid var(--surface-2)">
+            <span ${drillDown} style="flex:1;display:flex;align-items:center;gap:4px">
+              <span>${icon}</span>
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${displayName}</span>
+            </span>
+            <span style="color:${actionColor};cursor:pointer;font-size:10px;white-space:nowrap" 
+                  onclick="event.stopPropagation();app.addIgnoreFromBrowser('${path.replace(/'/g, "\\'")}')">${actionLabel}</span>
+          </div>`;
+        }).join('');
+        if (items.length > 100) {
+          html += `<div style="color:var(--text-dim);font-size:10px;padding:4px 6px">... 还有 ${items.length - 100} 项</div>`;
+        }
+      }
+      browser.innerHTML = html;
+    } catch (e) {
+      console.error('[showIgnoreBrowser] error:', e);
+      browser.innerHTML = `<div style="color:var(--red);font-size:11px;padding:6px">加载失败: ${e.message}</div>`;
+    }
+  },
+
+  async addIgnoreFromBrowser(path) {
+    // 模拟输入并调用 addIgnoreRule
+    const type = 'folder';
+    const fakeInput = { value: path, trim: () => path };
+    // 直接走 addIgnoreRule 的逻辑
+    if (!this.selectedFolder) return;
+    const data = await API.getIgnores(this.selectedFolder.id);
+    const ignores = data.ignore || [];
+    if (this._folderWhitelistMode) {
+      const starIdx = ignores.lastIndexOf('*');
+      const newRule = `!/${path}`;
+      if (starIdx >= 0) {
+        ignores.splice(starIdx, 0, newRule);
+      } else {
+        ignores.push(newRule);
+        ignores.push('*');
+      }
+    } else {
+      ignores.push(`/${path}`);
+    }
+    await API.setIgnores(this.selectedFolder.id, { ignore: ignores, patterns: data.patterns || [] });
+    this.loadFolderIgnores(this.selectedFolder.id);
+    // 刷新浏览器标记已添加
+    const items = document.querySelectorAll('.ignore-browser-item');
+    items.forEach(el => {
+      if (el.textContent.includes(path.split('/').pop())) {
+        el.style.opacity = '0.4';
+      }
+    });
   },
 
   async loadFolderDetail(id) {
