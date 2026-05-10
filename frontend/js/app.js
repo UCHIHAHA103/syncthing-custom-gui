@@ -461,6 +461,11 @@ const app = {
       let badgeClass = statusClass;
       let badgeText = synced ? (paused ? '已暂停' : '空闲') : '未同步';
 
+      // paused 状态优先级最高，清除 badge 缓存避免显示旧状态
+      if (paused && this._badgeCache[folder.id]) {
+        delete this._badgeCache[folder.id];
+      }
+
       // 本地路径缺失
       if (folder.localMissing) {
         console.warn(`[renderFolders] ${folder.id}: localMissing=true, localPath="${folder.localPath}", source=${this.nasFolders ? 'NAS' : 'local'}`);
