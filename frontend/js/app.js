@@ -734,7 +734,8 @@ const app = {
         if (inGlobal) continue;
         const t = line.trim();
         if (!t) continue;
-        if (t.startsWith('//')) continue; // 跳过所有注释（包括 //[black] //[white]）
+        if (t.startsWith('//')) continue; // 跳过所有注释
+        if (t.startsWith('#include')) continue; // 跳过 #include 指令
         filtered.push(line);
       }
       console.log(`[loadFolderIgnores] ${id}: ${filtered.length} filtered rules`);
@@ -1001,25 +1002,23 @@ const app = {
         const prefix = subpath ? `&prefix=${encodeURIComponent(subpath)}` : '';
         const data = await API.stFetch(`/rest/db/browse?folder=${encodeURIComponent(fid)}&levels=1${prefix}`);
         items = this._parseBrowseData(data);
-        items = this._parseBrowseData(data);
       } catch (e) {
         // Fallback：通过 sidecar 浏览本地文件系统
         if (folderPath) {
-          const browsePath = subpath ? `${folderPath}\\${subpath.replace(/\//g, '\\\\')}` : folderPath;
-          const fsData = await API.browseDir(browsePath);
-          const dirs = fsData.dirs || [];
-          items = dirs.map(name => ({ name: name.endsWith('/') ? name : name, isDir: true }));
-          // 也获取文件（browseDir 只返回目录，需要新增文件列表）
+          const sep = folderPath.includes('/') ? '/' : '\\';
+          const browsePath = subpath ? `${folderPath}${sep}${subpath.replace(/\//g, sep)}` : folderPath;
           try {
             const filesData = await API.sideFetch(`/api/list-dir?path=${encodeURIComponent(browsePath)}`);
             if (filesData && filesData.items) {
               items = filesData.items.map(f => ({ name: f.name, isDir: f.isDir }));
             }
           } catch (e2) {
-            // 只用目录列表
+            // 最后 fallback 到 browseDir（只有目录）
+            const fsData = await API.browseDir(browsePath);
+            items = (fsData.dirs || []).map(name => ({ name, isDir: true }));
           }
         } else {
-          throw e;
+          throw new Error('文件夹路径未知，无法浏览');
         }
       }
       // 排序：目录在前
