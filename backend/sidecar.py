@@ -1659,7 +1659,7 @@ class SidecarHandler(BaseHTTPRequestHandler):
                 "fsWatcherEnabled": True,
                 "fsWatcherDelayS": 10,
                 "devices": devices,
-                "paused": not auto_resume,
+                "paused": True,  # 始终暂停创建，等 .stignore/.sync-ignore 就绪后用户手动恢复
             }
             local_config["folders"].append(new_folder)
             syncthing_api("PUT", "/rest/config", local_config)
