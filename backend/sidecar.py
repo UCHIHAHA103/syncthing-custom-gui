@@ -553,17 +553,40 @@ def set_folder_order(order):
 
 # ===== 全局忽略规则 =====
 
+# 共享全局忽略文件（通过 Syncthing 同步到所有设备）
+SHARED_GLOBAL_IGNORE = Path(__file__).parent.parent / "config" / "global-ignore.txt"
+
 def get_global_ignore():
+    # 优先读共享配置（跨设备同步）
+    if SHARED_GLOBAL_IGNORE.exists():
+        lines = SHARED_GLOBAL_IGNORE.read_text(encoding="utf-8").splitlines()
+        rules = [l for l in lines if l.strip() and not l.strip().startswith("//")]
+        if rules:
+            # 同步到本地配置
+            set_global_ignore_local(rules)
+            return rules
+    # fallback 到本地配置
     if GLOBAL_IGNORE_FILE.exists():
         lines = GLOBAL_IGNORE_FILE.read_text(encoding="utf-8").splitlines()
         return [l for l in lines if l.strip() and not l.strip().startswith("//")]
     return []
 
 
-def set_global_ignore(rules):
+def set_global_ignore_local(rules):
+    """只写本地配置"""
     content = "// 全局忽略规则 - 所有同步文件夹生效\n"
     content += "\n".join(rules) + "\n"
     GLOBAL_IGNORE_FILE.write_text(content, encoding="utf-8")
+
+
+def set_global_ignore(rules):
+    # 写入共享配置（同步到所有设备）
+    SHARED_GLOBAL_IGNORE.parent.mkdir(parents=True, exist_ok=True)
+    content = "// 全局忽略规则 - 所有同步文件夹生效（此文件通过 Syncthing 同步）\n"
+    content += "\n".join(rules) + "\n"
+    SHARED_GLOBAL_IGNORE.write_text(content, encoding="utf-8")
+    # 同时写本地配置
+    set_global_ignore_local(rules)
 
 
 def sync_global_ignore_to_folders():

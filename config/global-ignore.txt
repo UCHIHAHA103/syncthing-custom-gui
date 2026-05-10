@@ -1,0 +1,8 @@
+// 全局忽略规则 - 所有同步文件夹生效（此文件通过 Syncthing 同步）
+**/cache
+**/Cache
+**/*.tmp
+**/node_modules
+**/.git
+**/Thumbs.db
+**/$RECYCLE.BIN
