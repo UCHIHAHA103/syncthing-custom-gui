@@ -1513,12 +1513,30 @@ class SidecarHandler(BaseHTTPRequestHandler):
             paused = body.get("paused", True)
             config = syncthing_api("GET", "/rest/config")
             if config:
+                folder_cfg = None
                 for f in config.get("folders", []):
                     if f["id"] == folder_id:
                         f["paused"] = paused
+                        folder_cfg = f
                         break
                 syncthing_api("PUT", "/rest/config", config)
                 self.send_json({"success": True})
+
+                # 恢复 receiveonly 文件夹时，后台等同步完成后自动切回 sendreceive
+                if not paused and folder_cfg and folder_cfg.get("type") == "receiveonly":
+                    def auto_upgrade_to_sendreceive():
+                        import urllib.parse
+                        encoded_id = urllib.parse.quote(folder_id, safe='')
+                        print(f"[auto-upgrade] {folder_id}: receiveonly resumed, waiting for sync to complete...")
+                        for _ in range(600):  # 最多等 10 分钟
+                            time.sleep(1)
+                            st = syncthing_api("GET", f"/rest/db/status?folder={encoded_id}", timeout=5)
+                            if st and st.get("needFiles", 1) == 0 and st.get("state") == "idle":
+                                syncthing_api("PATCH", f"/rest/config/folders/{encoded_id}", {"type": "sendreceive"})
+                                print(f"[auto-upgrade] {folder_id}: sync complete, upgraded to sendreceive")
+                                return
+                        print(f"[auto-upgrade] {folder_id}: timed out waiting for sync, staying receiveonly")
+                    threading.Thread(target=auto_upgrade_to_sendreceive, daemon=True).start()
             else:
                 self.send_json({"error": "API 不可用"}, 500)
 
