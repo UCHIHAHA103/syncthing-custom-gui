@@ -131,24 +131,45 @@ const app = {
     idz.addEventListener('dragenter', ev => { ev.preventDefault(); ev.stopPropagation(); idzCounter++; idz.classList.add('active'); });
     idz.addEventListener('dragover', ev => { ev.preventDefault(); ev.stopPropagation(); });
     idz.addEventListener('dragleave', ev => { ev.preventDefault(); ev.stopPropagation(); idzCounter--; if (idzCounter <= 0) { idzCounter = 0; idz.classList.remove('active'); } });
-    idz.addEventListener('drop', ev => {
+    idz.addEventListener('drop', async (ev) => {
       ev.preventDefault(); ev.stopPropagation(); idzCounter = 0; idz.classList.remove('active');
-      const items = ev.dataTransfer.items || [];
-      const files = ev.dataTransfer.files || [];
-      for (let i = 0; i < (items.length || files.length); i++) {
+      if (!this.selectedFolder) return;
+      const dtItems = ev.dataTransfer.items || [];
+      const dtFiles = ev.dataTransfer.files || [];
+      const names = [];
+      const count = Math.max(dtItems.length, dtFiles.length);
+      for (let i = 0; i < count; i++) {
         let name = '';
-        if (items[i]?.webkitGetAsEntry) {
-          const entry = items[i].webkitGetAsEntry();
+        if (dtItems[i]?.webkitGetAsEntry) {
+          const entry = dtItems[i].webkitGetAsEntry();
           name = entry ? entry.name : '';
-        } else if (files[i]) {
-          name = files[i].name;
+        } else if (dtFiles[i]) {
+          name = dtFiles[i].name;
         }
-        if (name && this.selectedFolder) {
-          const path = name.replace(/^\//, '');
-          console.log(`[ignoreDrop] adding: ${path}, whitelist: ${this._folderWhitelistMode}`);
-          this.addIgnoreFromBrowser(path);
+        if (name) names.push(name.replace(/^\//, ''));
+      }
+      if (names.length === 0) return;
+      console.log(`[ignoreDrop] adding ${names.length} items, whitelist: ${this._folderWhitelistMode}`);
+      // 批量添加：一次性读取 ignores，添加所有项，再写入
+      const data = await API.getIgnores(this.selectedFolder.id);
+      const ignores = data.ignore || [];
+      for (const name of names) {
+        if (this._folderWhitelistMode) {
+          const starIdx = ignores.lastIndexOf('*');
+          const newRule = `!/${name}`;
+          if (starIdx >= 0) {
+            ignores.splice(starIdx, 0, newRule);
+          } else {
+            ignores.push(newRule);
+            ignores.push('*');
+          }
+        } else {
+          ignores.push(`/${name}`);
         }
       }
+      await API.setIgnores(this.selectedFolder.id, { ignore: ignores, patterns: data.patterns || [] });
+      this.loadFolderIgnores(this.selectedFolder.id);
+      this.saveFolderRulesToJson(this.selectedFolder.id);
     });
   },
 
