@@ -670,9 +670,10 @@ const app = {
         if (line.includes('GLOBAL IGNORE START')) { inGlobal = true; continue; }
         if (line.includes('GLOBAL IGNORE END')) { inGlobal = false; continue; }
         if (inGlobal) continue;
-        if (line.trim() && !line.trim().startsWith('//')) {
-          filtered.push(line);
-        }
+        const t = line.trim();
+        if (!t) continue;
+        if (t.startsWith('//')) continue; // 跳过所有注释（包括 //[black] //[white]）
+        filtered.push(line);
       }
       console.log(`[loadFolderIgnores] ${id}: ${filtered.length} filtered rules`);
       // 检测白名单模式：最后一条规则是 * （空白名单或有 ! 规则的白名单）
@@ -786,11 +787,7 @@ const app = {
           const realIdx = filtered.indexOf(ruleToRemove);
           if (realIdx >= 0) filtered.splice(realIdx, 1);
         }
-        // 如果白名单清空了，也移除末尾 *，回到普通模式
-        if (!filtered.some(r => r.trim().startsWith('!'))) {
-          const starIdx = filtered.lastIndexOf('*');
-          if (starIdx >= 0) filtered.splice(starIdx, 1);
-        }
+        // 保留白名单模式（不移除 *）
       } else {
         filtered.splice(index, 1);
       }
@@ -804,7 +801,7 @@ const app = {
     const fid = this.selectedFolder.id;
     const data = await API.getIgnores(fid);
     let ignores = data.ignore || [];
-    // 过滤掉全局注入段
+    // 分离全局注入段和用户规则
     let inGlobal = false;
     const userRules = [];
     const globalRules = [];
@@ -817,19 +814,59 @@ const app = {
 
     let newUserRules = [];
     if (enabled) {
-      // 切换到白名单模式：把现有黑名单规则转为白名单（反转）
-      // 清空现有规则，添加 * 作为"忽略所有"
-      newUserRules = ['// 白名单模式：只同步以 ! 开头的路径', '*'];
-    } else {
-      // 切换到黑名单模式：移除末尾 *，把 ! 规则转为普通规则（可选）
+      // 切换到白名单模式：把当前黑名单规则注释保存，恢复已保存的白名单规则
+      const savedWhite = []; // 从注释中恢复白名单规则
+      const blackRules = []; // 当前活跃的黑名单规则
       for (const r of userRules) {
         const t = r.trim();
-        if (t === '*') continue;
-        if (t.startsWith('//') && t.includes('白名单')) continue;
-        if (t.startsWith('!')) {
-          // 白名单规则不自动转黑名单，直接丢弃
-          continue;
+        if (t.startsWith('//[white] ')) {
+          // 之前保存的白名单规则，恢复
+          savedWhite.push(t.slice('//[white] '.length));
+        } else if (t.startsWith('//[black] ')) {
+          // 已经注释的黑名单规则，保留
+          newUserRules.push(r);
+        } else if (t === '*' || t.startsWith('//')) {
+          // 跳过
+        } else {
+          // 活跃的黑名单规则 → 注释保存
+          blackRules.push(r);
         }
+      }
+      // 写入：注释的黑名单 + 恢复的白名单 + *
+      for (const r of blackRules) {
+        newUserRules.push(`//[black] ${r}`);
+      }
+      for (const r of savedWhite) {
+        newUserRules.push(r);
+      }
+      newUserRules.push('*');
+    } else {
+      // 切换到黑名单模式：把当前白名单规则注释保存，恢复已保存的黑名单规则
+      const savedBlack = []; // 从注释中恢复黑名单规则
+      const whiteRules = []; // 当前活跃的白名单规则
+      for (const r of userRules) {
+        const t = r.trim();
+        if (t.startsWith('//[black] ')) {
+          // 之前保存的黑名单规则，恢复
+          savedBlack.push(t.slice('//[black] '.length));
+        } else if (t.startsWith('//[white] ')) {
+          // 已经注释的白名单规则，保留
+          newUserRules.push(r);
+        } else if (t === '*' || t.startsWith('//')) {
+          // 跳过 * 和普通注释
+        } else if (t.startsWith('!')) {
+          // 活跃的白名单规则 → 注释保存
+          whiteRules.push(r);
+        } else {
+          // 其他活跃规则保留
+          savedBlack.push(r);
+        }
+      }
+      // 写入：注释的白名单 + 恢复的黑名单
+      for (const r of whiteRules) {
+        newUserRules.push(`//[white] ${r}`);
+      }
+      for (const r of savedBlack) {
         newUserRules.push(r);
       }
     }
