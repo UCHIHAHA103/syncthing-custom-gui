@@ -10,8 +10,6 @@ SyncTrayzor Custom GUI - Sidecar Service
 
 import json
 import os
-import glob
-import shutil
 import time
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -1026,6 +1024,27 @@ class SidecarHandler(BaseHTTPRequestHandler):
             # 目录浏览：返回指定路径下的子目录列表
             params = parse_qs(parsed.query)
             browse_path = params.get("path", [""])[0]
+            if not browse_path or not os.path.isabs(browse_path):
+                # 返回驱动器列表（Windows）
+                import string
+                drives = []
+                for letter in string.ascii_uppercase:
+                    drive = f"{letter}:\\"
+                    if os.path.exists(drive):
+                        drives.append(drive)
+                self.send_json({"path": "", "dirs": drives, "parent": ""})
+            else:
+                try:
+                    p = Path(browse_path)
+                    if not p.exists():
+                        parent = str(p.parent) if p.parent.exists() else ""
+                        self.send_json({"path": str(p), "dirs": [], "parent": parent})
+                    else:
+                        dirs = sorted([d.name for d in p.iterdir() if d.is_dir() and not d.name.startswith('.')])
+                        parent = str(p.parent) if p.parent != p else ""
+                        self.send_json({"path": str(p), "dirs": dirs, "parent": parent})
+                except Exception as e:
+                    self.send_json({"error": str(e)}, 400)
 
         elif path == "/api/read-file":
             params = parse_qs(parsed.query)
@@ -1057,29 +1076,6 @@ class SidecarHandler(BaseHTTPRequestHandler):
                     self.send_json({"error": str(e)}, 400)
             else:
                 self.send_json({"error": "路径不存在"}, 400)
-            return
-            if not browse_path or not os.path.isabs(browse_path):
-                # 返回驱动器列表（Windows）
-                import string
-                drives = []
-                for letter in string.ascii_uppercase:
-                    drive = f"{letter}:\\"
-                    if os.path.exists(drive):
-                        drives.append(drive)
-                self.send_json({"path": "", "dirs": drives, "parent": ""})
-            else:
-                try:
-                    p = Path(browse_path)
-                    if not p.exists():
-                        # 路径不存在，返回父级
-                        parent = str(p.parent) if p.parent.exists() else ""
-                        self.send_json({"path": str(p), "dirs": [], "parent": parent})
-                    else:
-                        dirs = sorted([d.name for d in p.iterdir() if d.is_dir() and not d.name.startswith('.')])
-                        parent = str(p.parent) if p.parent != p else ""
-                        self.send_json({"path": str(p), "dirs": dirs, "parent": parent})
-                except Exception as e:
-                    self.send_json({"error": str(e)}, 400)
 
         elif path.startswith("/rest/"):
             # 代理 Syncthing REST API
@@ -1223,36 +1219,6 @@ class SidecarHandler(BaseHTTPRequestHandler):
                     threading.Thread(target=post_ensure, daemon=True).start()
 
                 threading.Thread(target=do_ensure, daemon=True).start()
-
-            except Exception as e:
-                self.send_json({"error": str(e)}, 500)
-
-                # 异步：确保 NAS 端目录存在 + 等同步完成后改回 sendreceive
-                def post_sync_restore():
-                    import subprocess
-                    # 确保 NAS 端目录存在
-                    nas_fc = nas_api("GET", f"/rest/config/folders/{encoded_id}")
-                    nas_path = nas_fc.get("path", "") if nas_fc else f"{NAS_SYNCTHING_DATA_PREFIX}/{folder_id}"
-                    if nas_path:
-                        mkdir_cmd = f"docker exec syncthing mkdir -p '{nas_path}/.stfolder'"
-                        subprocess.run(
-                            ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", NAS_SSH, mkdir_cmd],
-                            capture_output=True, timeout=10
-                        )
-                    # 等同步完成，最多 5 分钟
-                    for _ in range(60):
-                        time.sleep(5)
-                        st = syncthing_api("GET", f"/rest/db/status?folder={encoded_id}", timeout=5)
-                        if st and st.get("needFiles", 1) == 0 and st.get("state") == "idle":
-                            break
-                    # 改回 sendreceive
-                    syncthing_api("PATCH", f"/rest/config/folders/{encoded_id}", {"type": "sendreceive"})
-                    print(f"[sidecar] {folder_id}: 同步完成，已恢复为 sendreceive")
-
-                threading.Thread(target=post_sync_restore, daemon=True).start()
-
-            except Exception as e:
-                self.send_json({"error": str(e)}, 500)
 
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
