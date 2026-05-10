@@ -1379,6 +1379,34 @@ class SidecarHandler(BaseHTTPRequestHandler):
                         print(f"[sidecar] delete-folder: NAS files preserved (deleteNasFiles={delete_nas_files})")
                 else:
                     print(f"[sidecar] delete-folder: no SSH, local-only removal")
+
+                # 删除云服务器上的配置和数据
+                cloud_api_key = "qzyo5HW5vx9vJkyQYegMDbbUJL9AZoeU"
+                cloud_host = "42.192.65.73"
+                try:
+                    import urllib.request
+                    # 删除云服务器文件夹配置
+                    req = urllib.request.Request(
+                        f"http://{cloud_host}:8384/rest/config/folders/{encoded_id}",
+                        headers={"X-API-Key": cloud_api_key},
+                        method="DELETE"
+                    )
+                    urllib.request.urlopen(req, timeout=10)
+                    print(f"[sidecar] delete-folder: removed from cloud server config")
+                    # 删除云服务器数据文件
+                    if delete_nas_files:
+                        cloud_path = f"/home/ubuntu/Sync/{folder_id}"
+                        try:
+                            rm_result = subprocess.run(
+                                ["ssh", "-o", "ConnectTimeout=5", "-b", "192.168.3.35", "cloud", f"rm -rf '{cloud_path}'"],
+                                capture_output=True, timeout=15
+                            )
+                            print(f"[sidecar] delete-folder: removed cloud files at {cloud_path}")
+                        except Exception as e:
+                            print(f"[sidecar] delete-folder: cloud file removal failed: {e}")
+                except Exception as e:
+                    print(f"[sidecar] delete-folder: cloud cleanup failed: {e}")
+
                 # 删除本地配置
                 local_config = syncthing_api("GET", "/rest/config")
                 if local_config:

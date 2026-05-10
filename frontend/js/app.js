@@ -1356,7 +1356,7 @@ const app = {
       </div>
       <label style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:11px;color:var(--text-muted);cursor:pointer">
         <input type="checkbox" id="deleteNasFiles" style="accent-color:var(--red)">
-        <span>同时删除 NAS 端文件（不可恢复）</span>
+        <span>同时删除服务器文件（不可恢复）</span>
       </label>
     `;
     document.getElementById('modalFooter').innerHTML = `
