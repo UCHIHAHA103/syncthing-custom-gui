@@ -871,7 +871,9 @@ const app = {
       if (resp && resp.content !== undefined) {
         for (const line of resp.content.split('\n')) {
           const t = line.trim();
-          if (!t || t.startsWith('//') || t.startsWith('#include')) continue;
+          if (!t || t.startsWith('#include')) continue;
+          // 保留 //[black] 和 //[white] 备份标记，跳过其他注释
+          if (t.startsWith('//') && !t.startsWith('//[black]') && !t.startsWith('//[white]')) continue;
           currentRules.push(t);
         }
       }
