@@ -215,7 +215,7 @@ body {
 
 .folder-info { flex: 1; min-width: 0; }
 .folder-name { font-size: 12px; font-weight: 500; margin-bottom: 2px; }
-.folder-path { font-size: 10px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.folder-path { font-size: 10px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; display: inline-block; max-width: 100%; }
 .folder-path:hover { text-decoration: underline; color: var(--accent); }
 .folder-note-inline { font-size: 10px; color: var(--text-muted); margin-top: 2px; font-style: italic; }
 
