@@ -1484,7 +1484,8 @@ const app = {
 
     try {
       if (this.sidecarOk) {
-        const result = await API.addFolder(path, label || undefined);
+        const autoResume = localStorage.getItem('autoSyncOnAdd') === 'true';
+        const result = await API.addFolder(path, label || undefined, autoResume);
         if (result.error) {
           showErr(result.error);
           return;
@@ -1510,7 +1511,7 @@ const app = {
           fsWatcherEnabled: true,
           fsWatcherDelayS: 2,
           devices: allDevices,
-          paused: false,
+          paused: localStorage.getItem('autoSyncOnAdd') !== 'true',
         });
         await API.setConfig(config);
       }

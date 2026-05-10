@@ -802,8 +802,8 @@ def migrate_folder_path(folder_id, new_path):
 
 # ===== 添加文件夹 =====
 
-def add_folder(path, label=None):
-    """添加新的同步文件夹"""
+def add_folder(path, label=None, paused=True):
+    """添加新的同步文件夹，默认暂停（让用户先配置忽略规则）"""
     path_obj = Path(path)
     if not path_obj.is_dir():
         return {"error": "路径不存在或不是目录"}
@@ -853,7 +853,7 @@ def add_folder(path, label=None):
         "fsWatcherEnabled": True,
         "fsWatcherDelayS": 10,
         "devices": all_devices,
-        "paused": False,
+        "paused": paused,
     }
 
     config["folders"].append(new_folder)
@@ -1306,7 +1306,8 @@ class SidecarHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": str(e)}, 500)
 
         elif path == "/api/add-folder":
-            result = add_folder(body.get("path", ""), body.get("label"))
+            auto_resume = body.get("autoResume", False)
+            result = add_folder(body.get("path", ""), body.get("label"), paused=not auto_resume)
             self.send_json(result)
 
         elif path == "/api/open-in-explorer":

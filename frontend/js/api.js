@@ -65,7 +65,7 @@ const API = {
   async getNote(path) { return this.sideFetch(`/api/note?path=${encodeURIComponent(path)}`); },
   async getAllNotes() { return this.sideFetch('/api/notes'); },
   async setNote(path, note) { return this.sideFetch('/api/note', 'POST', { path, note }); },
-  async addFolder(path, label) { return this.sideFetch('/api/add-folder', 'POST', { path, label }); },
+  async addFolder(path, label, autoResume = false) { return this.sideFetch('/api/add-folder', 'POST', { path, label, autoResume: !!autoResume }); },
   async findPath(name) { return this.sideFetch(`/api/find-path?name=${encodeURIComponent(name)}`); },
   async getNasFolders() { return this.sideFetch('/api/nas-folders'); },
   async getNasFolderStatus(folderId) { return this.sideFetch(`/api/nas-folder-status?folder=${encodeURIComponent(folderId)}`); },
