@@ -622,7 +622,10 @@ def remove_folder_ignore_rules(folder_id):
 
 
 def apply_ignore_rules_to_folders():
-    """将集中式忽略规则应用到所有文件夹的 .stignore"""
+    """将集中式忽略规则应用到所有文件夹：
+    - 全局规则写入 .stignore（不可同步）
+    - 文件夹规则写入 .sync-ignore（可同步），.stignore 用 #include 引用
+    """
     global _ignore_rules_mtime
     if not IGNORE_RULES_JSON.exists():
         return
@@ -646,53 +649,60 @@ def apply_ignore_rules_to_folders():
             continue
 
         stignore_path = Path(folder_path) / ".stignore"
+        sync_ignore_path = Path(folder_path) / ".sync-ignore"
 
-        # 构建 .stignore 内容
-        lines = []
-
-        # 1. 全局规则段
-        lines.append("// --- GLOBAL IGNORE START ---")
+        # 1. 构建 .stignore（全局规则 + #include）
+        stignore_lines = []
+        stignore_lines.append("// --- GLOBAL IGNORE START ---")
         for r in global_rules:
-            lines.append(r)
-        lines.append("// --- GLOBAL IGNORE END ---")
+            stignore_lines.append(r)
+        stignore_lines.append("// --- GLOBAL IGNORE END ---")
+        stignore_lines.append("#include .sync-ignore")
 
-        # 2. 文件夹专属规则段（从 JSON 读取）
-        fr = folder_rules.get(fid)
-        if fr:
-            mode = fr.get("mode", "blacklist")
-            rules = fr.get("rules", [])
-            lines.append("// --- FOLDER RULES START ---")
-            if mode == "whitelist":
-                for r in rules:
-                    lines.append(f"!/{r}" if not r.startswith("!") else r)
-                lines.append("*")
-            else:
-                for r in rules:
-                    lines.append(r)
-            lines.append("// --- FOLDER RULES END ---")
-
-        # 3. 保留用户手动添加的规则（不在标记段内的）
+        # 保留用户手动添加的规则（不在标记段和 #include 内的）
         if stignore_path.exists():
             existing = stignore_path.read_text(encoding="utf-8").splitlines()
             in_managed = False
             for line in existing:
-                if "GLOBAL IGNORE START" in line or "FOLDER RULES START" in line:
+                if "GLOBAL IGNORE START" in line:
                     in_managed = True
                     continue
-                if "GLOBAL IGNORE END" in line or "FOLDER RULES END" in line:
+                if "GLOBAL IGNORE END" in line:
                     in_managed = False
                     continue
                 if in_managed:
                     continue
-                # 保留用户手动规则
-                if line.strip() and not line.strip().startswith("//[black]") and not line.strip().startswith("//[white]"):
-                    lines.append(line)
+                if line.strip() == "#include .sync-ignore":
+                    continue
+                if line.strip():
+                    stignore_lines.append(line)
 
-        content = "\n".join(lines) + "\n"
         try:
-            stignore_path.write_text(content, encoding="utf-8")
+            stignore_path.write_text("\n".join(stignore_lines) + "\n", encoding="utf-8")
         except Exception as e:
             print(f"[ignore-rules] Failed to write {fid}/.stignore: {e}")
+
+        # 2. 构建 .sync-ignore（文件夹专属规则，会被 Syncthing 同步到所有设备）
+        fr = folder_rules.get(fid)
+        if fr:
+            mode = fr.get("mode", "blacklist")
+            rules = fr.get("rules", [])
+            sync_lines = []
+            sync_lines.append(f"// 同步忽略规则 - mode: {mode}")
+            if mode == "whitelist":
+                for r in rules:
+                    sync_lines.append(f"!/{r}" if not r.startswith("!") else r)
+                sync_lines.append("*")
+            else:
+                for r in rules:
+                    sync_lines.append(r)
+            try:
+                sync_ignore_path.write_text("\n".join(sync_lines) + "\n", encoding="utf-8")
+            except Exception as e:
+                print(f"[ignore-rules] Failed to write {fid}/.sync-ignore: {e}")
+        elif sync_ignore_path.exists():
+            # JSON 里没有规则但文件存在 → 不删除（可能是其他设备同步过来的）
+            pass
 
     print(f"[ignore-rules] Applied rules to {len(config.get('folders', []))} folders")
 
