@@ -6,3 +6,4 @@
 **/.git
 **/Thumbs.db
 **/$RECYCLE.BIN
+**/.sync-conflict-*
