@@ -1137,6 +1137,19 @@ class SidecarHandler(BaseHTTPRequestHandler):
             params = parse_qs(parsed.query)
             browse_path = params.get("path", [""])[0]
 
+        elif path == "/api/read-file":
+            params = parse_qs(parsed.query)
+            file_path = params.get("path", [""])[0]
+            if file_path and os.path.isfile(file_path):
+                try:
+                    content = Path(file_path).read_text(encoding="utf-8")
+                    self.send_json({"content": content})
+                except Exception as e:
+                    self.send_json({"error": str(e)}, 400)
+            else:
+                self.send_json({"content": ""})
+            return
+
         elif path == "/api/list-dir":
             # 列出目录下的所有文件和子目录（忽略规则浏览器用）
             params = parse_qs(parsed.query)
@@ -1372,6 +1385,76 @@ class SidecarHandler(BaseHTTPRequestHandler):
             auto_resume = body.get("autoResume", False)
             result = add_folder(body.get("path", ""), body.get("label"), paused=not auto_resume)
             self.send_json(result)
+
+        elif path == "/api/edit-sync-ignore":
+            # 直接操作 .sync-ignore 文件（不碰 .stignore）
+            folder_id = body.get("folderId", "")
+            folder_path = body.get("path", "")
+            action = body.get("action", "")  # add / remove
+            rule = body.get("rule", "")
+            index = body.get("index", -1)
+            whitelist = body.get("whitelist", False)
+
+            if not folder_path:
+                # 从 config 查找路径
+                config = syncthing_api("GET", "/rest/config")
+                if config:
+                    for f in config.get("folders", []):
+                        if f["id"] == folder_id:
+                            folder_path = f.get("path", "")
+                            break
+
+            sync_ignore_path = Path(folder_path) / ".sync-ignore" if folder_path else None
+            if not sync_ignore_path or not folder_path:
+                self.send_json({"error": "文件夹路径未知"}, 400)
+                return
+
+            # 读取现有规则
+            rules = []
+            if sync_ignore_path.exists():
+                lines = sync_ignore_path.read_text(encoding="utf-8").splitlines()
+                rules = [l for l in lines if l.strip() and not l.strip().startswith("//")]
+            else:
+                if whitelist:
+                    rules = ["*"]
+
+            if action == "add":
+                if whitelist:
+                    new_rule = rule if rule.startswith("!") else f"!{rule}"
+                    # 在 * 之前插入
+                    if "*" in rules:
+                        star_idx = rules.index("*")
+                        rules.insert(star_idx, new_rule)
+                    else:
+                        rules.append(new_rule)
+                        rules.append("*")
+                else:
+                    rules.append(rule)
+
+            elif action == "remove":
+                # 提取显示规则（和前端 loadFolderIgnores 一致的过滤逻辑）
+                if whitelist:
+                    display_rules = [r for r in rules if r.strip().startswith("!")]
+                    if 0 <= index < len(display_rules):
+                        rules.remove(display_rules[index])
+                else:
+                    display_rules = [r for r in rules if r.strip() != "*"]
+                    if 0 <= index < len(display_rules):
+                        rules.remove(display_rules[index])
+
+            # 写回 .sync-ignore
+            mode_str = "whitelist" if whitelist else "blacklist"
+            content = f"// 同步忽略规则 - mode: {mode_str}\n"
+            content += "\n".join(rules) + "\n"
+            sync_ignore_path.write_text(content, encoding="utf-8")
+
+            # 通知 Syncthing 重新扫描忽略规则
+            import urllib.parse
+            encoded_id = urllib.parse.quote(folder_id, safe='')
+            syncthing_api("POST", f"/rest/db/scan?folder={encoded_id}")
+
+            self.send_json({"success": True})
+            return
 
         elif path == "/api/open-in-explorer":
             folder_path = body.get("path", "")
