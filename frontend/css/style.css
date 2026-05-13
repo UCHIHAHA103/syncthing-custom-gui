@@ -194,7 +194,6 @@ body {
   height: 26px !important; min-width: 40px;
   white-space: nowrap;
 }
-}
 
 .folder-drag {
   width: 14px; display: flex; flex-direction: column;
@@ -486,4 +485,3 @@ body {
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 2px; }
-</style>

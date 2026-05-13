@@ -127,23 +127,60 @@ sudo systemctl restart sync-device-sync
 - 公司电脑也有 NGNClient, 同样需要: `route -p add 42.192.65.73 mask 255.255.255.255 10.97.85.1 metric 1 if 11`
 - 公司无法 SSH/tcp 直连 NAS (非腾讯云 IP 被 DPI 拦截)
 
-## 当前未解决的 Bug
+## 已修复的历史 Bug
 
-### 忽略规则系统
+- **toggleWhitelistMode 全局规则混入** — 已改为直接操作 .sync-ignore，带 `//[black]` / `//[white]` 备份标记的模式切换
+- **白名单模式 .sync-ignore 自身被忽略** — 白名单 `*` 会忽略所有文件包括 .sync-ignore，已自动插入 `!/.sync-ignore`
+- **新建文件夹预创建 .sync-ignore 阻止 NAS 版本同步** — 改为 sync-to-local 不预创建 .sync-ignore，由 NAS receiveonly 同步到达
+- **忽略规则浏览器只显示部分文件** — `db/browse` API 只返回已索引文件，白名单模式下大量文件被忽略不会索引；已改为优先 sidecar `list-dir`（本地文件系统）
+- **Syncthing HTTP 服务线程死锁导致 8080 白屏** — 见下方问题描述
 
-1. **从 8080 界面添加忽略规则后, .sync-ignore 文件有时不更新**
-   - 后端 API `/api/edit-sync-ignore` 直接调用时正常工作
-   - 问题可能在前端传参: `this.selectedFolder.path` 可能为空
-   - 需要检查前端 `addIgnoreFromBrowser` 和浏览器 `+` 按钮传的参数
+## 当前已知问题
 
-2. **loadFolderIgnores 有时 fallback 到 Syncthing API 显示全局规则**
-   - 当 `/api/read-file` 读取 `.sync-ignore` 失败时会 fallback
-   - Syncthing 的 `/rest/db/ignores` 返回合并后的所有规则 (含全局)
-   - 需要确保 fallback 时也正确过滤
+- **loadFolderIgnores fallback 时可能显示全局规则** — 当 `.sync-ignore` 读取失败 fallback 到 Syncthing API 时，过滤逻辑需要验证
 
-3. **toggleWhitelistMode 仍使用 Syncthing API (setIgnores)**
-   - 应该也改为操作 `.sync-ignore`
-   - 当前切换白名单/黑名单模式会导致全局规则混入
+---
+
+## 问题排查记录
+
+### 2026-05-12 — Syncthing HTTP 死锁导致 8080 白屏
+
+**现象**
+
+8080 页面能打开、UI 框架正常渲染，但文件夹列表区域全黑，右上角报错：
+```
+连接失败: API 502: /rest/system/status
+```
+
+**诊断过程**
+
+1. 确认 `:8080`（前端 Python http.server）和 `:8385`（sidecar）均正常监听
+2. sidecar `/api/health` 返回 `{"status": "ok"}` — sidecar 自身正常
+3. 直接访问 `:8384` — **无法连接**（PowerShell 报 "无法连接到远程服务器"）
+4. `netstat` 显示 Syncthing 进程（PID 35976）仍存活，128MB 内存，但连接状态异常：
+   - 多条 `CLOSE_WAIT` — 服务端不关闭连接（HTTP 线程卡死）
+   - sidecar 的连接卡在 `SYN_SENT` — TCP 握手无响应
+
+**根本原因**
+
+Syncthing 进程未崩溃，但内部 HTTP 服务线程**死锁/卡死**，无法处理新请求。
+常见触发原因：数据库锁冲突（leveldb）、大量文件夹扫描时 goroutine 死锁、内存压力 GC 卡顿。
+
+**解决方案**
+
+强杀并重启 Syncthing 进程：
+```powershell
+Stop-Process -Id <PID> -Force
+Start-Process -FilePath "syncthing" -WindowStyle Hidden
+```
+
+**预防措施**
+
+在 `sidecar.py` 中加入 `syncthing_watchdog()` 后台线程（位于 `main()` 前）：
+- 每 15 秒 ping `http://127.0.0.1:8384/rest/system/ping`
+- 连续 3 次失败（约 45 秒无响应）自动执行：`taskkill /F /IM syncthing.exe` → 重新 `Popen` 启动
+- 重启后冷却 60 秒，防止反复重启
+- 自动搜索 syncthing 可执行文件路径（PATH + 常见安装位置）
 
 ### 忽略规则架构
 
@@ -157,15 +194,20 @@ sudo systemctl restart sync-device-sync
   #include .sync-ignore
 
 .sync-ignore (Syncthing 同步, 8080 UI 管理):
-  // 同步忽略规则 - mode: blacklist
+  // 同步忽略规则 - mode: blacklist|whitelist
   /010.jpg
   /011.jpg
+  //[white] !/013.jpg     ← 模式切换时的备份标记
+  *                        ← 白名单末尾通配符
 ```
 
 - 8080 UI 的增删改 → 只操作 .sync-ignore (通过 /api/edit-sync-ignore)
 - UI 显示 → 优先读 .sync-ignore (通过 /api/read-file), fallback 到 Syncthing API
+- 忽略规则浏览器 → 优先 sidecar list-dir（全部本地文件）, fallback 到 db/browse（仅已索引文件）
 - 创建文件夹时 → 自动创建 .stignore (含全局规则 + #include .sync-ignore)
-- sidecar 启动时 → ensure_stignore_includes() 补全已有文件夹
+- sync-to-local → .stignore 不含 #include（等 .sync-ignore 从 NAS 同步到达后 auto-upgrade 补上）
+- 白名单模式 → 自动插入 !/.sync-ignore 防止自身被忽略
+- 模式切换 → 用 //[black] //[white] 备份标记保留另一模式的规则
 
 ## 云服务器信息
 
@@ -200,4 +242,4 @@ sudo systemctl restart sync-device-sync
 
 - 仓库: `https://github.com/UCHIHAHA103/syncthing-custom-gui.git`
 - 分支: `main`
-- 最新 commit: `6c7d95b` (fix: filter #include when reading/writing .sync-ignore)
+- 最新 commit: `1dc4dde` (cleanup: fix dead code and unused imports after full code review)

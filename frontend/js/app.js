@@ -148,10 +148,12 @@ const app = {
         }
         if (name) names.push(name.replace(/^\//, ''));
       }
-      if (names.length === 0) return;
-      console.log(`[ignoreDrop] adding ${names.length} items, whitelist: ${this._folderWhitelistMode}`);
+      // 过滤隐藏文件（.sync-ignore / .stignore 等不应作为规则添加）
+      const filtered = names.filter(n => !n.startsWith('.'));
+      if (filtered.length === 0) return;
+      console.log(`[ignoreDrop] adding ${filtered.length} items, whitelist: ${this._folderWhitelistMode}`);
       // 批量添加：通过 sidecar 操作 .sync-ignore
-      for (const name of names) {
+      for (const name of filtered) {
         await API.sideFetch('/api/edit-sync-ignore', 'POST', {
           folderId: this.selectedFolder.id,
           path: this.selectedFolder.path,
@@ -210,7 +212,7 @@ const app = {
     } catch (e) {
       console.error('[refresh] error:', e);
       document.getElementById('statusDot').className = 'status-dot off';
-      document.getElementById('statusText').textContent = '连接失败: ' + e.message;
+      document.getElementById('statusText').textContent = e.message || '连接失败';
     }
   },
 
@@ -710,8 +712,21 @@ const app = {
     // 加载详情
     this.loadFolderDetail(id);
 
-    // 加载备注
-    document.getElementById('noteArea').value = this.notes[id] || '';
+    // 加载备注（从 .sync-ignore NOTE 块读取）
+    const noteArea = document.getElementById('noteArea');
+    noteArea.value = this.notes[id] || '';
+    if (this.sidecarOk) {
+      const folderPath = folder.path;
+      if (folderPath) {
+        API.getSyncIgnoreNote(folderPath).then(data => {
+          if (data && data.note !== undefined) {
+            noteArea.value = data.note;
+            this.notes[id] = data.note;
+            console.log(`[selectFolder] note loaded from .sync-ignore: ${id}, ${data.note.length} chars`);
+          }
+        }).catch(e => console.warn('[selectFolder] note load failed:', e));
+      }
+    }
   },
 
   async loadFolderIgnores(id) {
@@ -754,8 +769,9 @@ const app = {
           if (inGlobal) continue;
           const t = line.trim();
           if (!t) continue;
-          if (t.startsWith('//')) continue;
+          if (t.startsWith('//')) continue;          // 注释（含 //[black] //[white] 备份标记）
           if (t.startsWith('#include')) continue;
+          if (t === '!/.sync-ignore') continue;      // 系统规则，不显示
           filtered.push(t);
         }
       }
@@ -951,52 +967,81 @@ const app = {
     this.loadFolderIgnores(fid);
   },
 
-  async showIgnoreBrowser(subpath = '') {
+  async showIgnoreBrowser(subpath = '', forceRefresh = false) {
     if (!this.selectedFolder) return;
     const fid = this.selectedFolder.id;
     const browser = document.getElementById('ignoreBrowser');
     if (!browser) return;
-    // 无 subpath 时 toggle（点击📂按钮）；有 subpath 时始终展开（drill down）
-    if (!subpath && browser.style.display === 'block' && browser.innerHTML) {
+    // 无 subpath 时 toggle（点击📂按钮）；有 subpath 或 forceRefresh 时始终展开
+    if (!subpath && !forceRefresh && browser.style.display === 'block' && browser.innerHTML) {
       browser.style.display = 'none';
       return;
     }
+    this._browserSubpath = subpath; // 记住当前浏览位置
     browser.style.display = 'block';
     browser.innerHTML = '<div style="color:var(--text-dim);font-size:11px;padding:6px">加载中...</div>';
     try {
       let items = [];
       const folderPath = this.selectedFolder.path;
-      try {
-        // 尝试 Syncthing db/browse API（文件夹必须未暂停）
-        const prefix = subpath ? `&prefix=${encodeURIComponent(subpath)}` : '';
-        const data = await API.stFetch(`/rest/db/browse?folder=${encodeURIComponent(fid)}&levels=1${prefix}`);
-        items = this._parseBrowseData(data);
-      } catch (e) {
-        // Fallback：通过 sidecar 浏览本地文件系统
-        if (folderPath) {
-          const sep = folderPath.includes('/') ? '/' : '\\';
-          const browsePath = subpath ? `${folderPath}${sep}${subpath.replace(/\//g, sep)}` : folderPath;
-          try {
-            const filesData = await API.sideFetch(`/api/list-dir?path=${encodeURIComponent(browsePath)}`);
-            if (filesData && filesData.items) {
-              items = filesData.items.map(f => ({ name: f.name, isDir: f.isDir }));
-            }
-          } catch (e2) {
-            // 最后 fallback 到 browseDir（只有目录）
-            const fsData = await API.browseDir(browsePath);
-            items = (fsData.dirs || []).map(name => ({ name, isDir: true }));
+      // 优先使用 sidecar list-dir（本地文件系统）：db/browse 只返回已索引文件，白名单模式下会漏掉未同步的文件
+      if (folderPath && this.sidecarOk) {
+        const sep = folderPath.includes('/') ? '/' : '\\';
+        const browsePath = subpath ? `${folderPath}${sep}${subpath.replace(/\//g, sep)}` : folderPath;
+        try {
+          const filesData = await API.sideFetch(`/api/list-dir?path=${encodeURIComponent(browsePath)}`);
+          if (filesData && filesData.items) {
+            items = filesData.items.map(f => ({ name: f.name, isDir: f.isDir }));
           }
-        } else {
-          throw new Error('文件夹路径未知，无法浏览');
+        } catch (e) {
+          console.warn('[showIgnoreBrowser] list-dir failed, trying db/browse:', e);
+        }
+      }
+      // Fallback：Syncthing db/browse API（无本地路径或 list-dir 失败时）
+      if (items.length === 0) {
+        try {
+          const prefix = subpath ? `&prefix=${encodeURIComponent(subpath)}` : '';
+          const data = await API.stFetch(`/rest/db/browse?folder=${encodeURIComponent(fid)}&levels=1${prefix}`);
+          items = this._parseBrowseData(data);
+        } catch (e) {
+          if (!folderPath) {
+            throw new Error('文件夹路径未知，无法浏览');
+          }
         }
       }
       // 过滤掉 . 开头的文件（.stignore, .sync-ignore, .sync-conflict 等）
       items = items.filter(item => !item.name.startsWith('.'));
       // 排序：目录在前
       items.sort((a, b) => (b.isDir - a.isDir) || a.name.localeCompare(b.name));
+
+      // 收集已有忽略规则，用于标记已添加的项
+      const existingRules = new Set();
+      try {
+        const block = document.getElementById('folderIgnoreBlock');
+        if (block) {
+          block.querySelectorAll('.line-text').forEach(el => {
+            const r = el.textContent.trim();
+            existingRules.add(r);
+            existingRules.add('/' + r); // 兼容带/不带前缀
+            if (r.startsWith('/')) existingRules.add(r.slice(1));
+          });
+        }
+      } catch (e) {}
+
+      // 计算未添加的文件项（非目录、非已添加）
+      const unadded = items.filter(item => {
+        if (item.isDir) return false;
+        const p = subpath ? `${subpath}${item.name}` : item.name;
+        const rp = `/${p}`;
+        return !existingRules.has(rp) && !existingRules.has(p) && !existingRules.has(item.name);
+      });
+      const selectAllBtn = unadded.length > 0
+        ? `<span style="cursor:pointer;color:var(--green);margin-left:6px" onclick="app.addAllFromBrowser('${(subpath || '').replace(/'/g, "\\'")}')">+全选(${unadded.length})</span>`
+        : '';
+
       let html = `<div style="font-size:10px;color:var(--text-dim);padding:4px 6px;border-bottom:1px solid var(--surface-3)">
         ${subpath ? `<span style="cursor:pointer;color:var(--accent)" onclick="app.showIgnoreBrowser('')">⬅ 根目录</span> / ` : ''}
         <span>${subpath || fid}</span>
+        ${selectAllBtn}
         <span style="float:right;cursor:pointer" onclick="document.getElementById('ignoreBrowser').style.display='none'">✕</span>
       </div>`;
       if (items.length === 0) {
@@ -1005,15 +1050,22 @@ const app = {
         html += items.slice(0, 100).map(item => {
           const icon = item.isDir ? '📁' : '📄';
           const path = subpath ? `${subpath}${item.name}` : item.name;
+          const dirPath = item.isDir ? (path.endsWith('/') ? path : path + '/') : path;
           const displayName = item.name.replace(/\/$/, '');
-          const drillDown = item.isDir ? `onclick="app.showIgnoreBrowser('${path.replace(/'/g, "\\'")}')"` : '';
-          return `<div style="display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:11px;cursor:pointer;border-bottom:1px solid var(--surface-2)">
+          const drillDown = item.isDir ? `onclick="app.showIgnoreBrowser('${dirPath.replace(/'/g, "\\'")}')"` : '';
+          // 检查是否已在忽略规则中
+          const rulePath = `/${path}`;
+          const added = existingRules.has(rulePath) || existingRules.has(path) || existingRules.has(item.name);
+          const addBtn = added
+            ? `<span style="flex-shrink:0;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--text-dim)">✓</span>`
+            : `<span style="flex-shrink:0;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-size:14px;font-weight:bold;color:var(--green);cursor:pointer"
+                    onclick="event.stopPropagation();app.addIgnoreFromBrowser('${path.replace(/'/g, "\\'")}')">+</span>`;
+          return `<div style="display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:11px;cursor:pointer;border-bottom:1px solid var(--surface-2)${added ? ';opacity:0.4' : ''}">
             <span ${drillDown} style="flex:1;display:flex;align-items:center;gap:4px;overflow:hidden;min-width:0">
               <span style="flex-shrink:0">${icon}</span>
               <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px">${displayName}</span>
             </span>
-            <span style="flex-shrink:0;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-size:14px;font-weight:bold;color:var(--green);cursor:pointer"
-                  onclick="event.stopPropagation();app.addIgnoreFromBrowser('${path.replace(/'/g, "\\'")}')">+</span>
+            ${addBtn}
           </div>`;
         }).join('');
         if (items.length > 100) {
@@ -1060,13 +1112,36 @@ const app = {
       whitelist: this._folderWhitelistMode
     });
     await this.loadFolderIgnores(this.selectedFolder.id);
-    // 刷新浏览器标记已添加
-    const items = document.querySelectorAll('.ignore-browser-item');
-    items.forEach(el => {
-      if (el.textContent.includes(path.split('/').pop())) {
-        el.style.opacity = '0.4';
-      }
-    });
+    // 重新渲染浏览器以更新已添加标记
+    await this.showIgnoreBrowser(this._browserSubpath || '', true);
+  },
+
+  async addAllFromBrowser(subpath) {
+    if (!this.selectedFolder) return;
+    const folderPath = this.selectedFolder.path;
+    if (!folderPath) return;
+    // 获取当前目录文件列表
+    const sep = folderPath.includes('/') ? '/' : '\\';
+    const browsePath = subpath ? `${folderPath}${sep}${subpath.replace(/\//g, sep)}` : folderPath;
+    let items = [];
+    try {
+      const filesData = await API.sideFetch(`/api/list-dir?path=${encodeURIComponent(browsePath)}`);
+      if (filesData && filesData.items) items = filesData.items;
+    } catch (e) { return; }
+    // 只添加非目录、非 . 开头的文件
+    const files = items.filter(f => !f.isDir && !f.name.startsWith('.'));
+    for (const f of files) {
+      const path = subpath ? `${subpath}${f.name}` : f.name;
+      await API.sideFetch('/api/edit-sync-ignore', 'POST', {
+        folderId: this.selectedFolder.id,
+        path: this.selectedFolder.path,
+        action: 'add',
+        rule: `/${path}`,
+        whitelist: this._folderWhitelistMode
+      });
+    }
+    await this.loadFolderIgnores(this.selectedFolder.id);
+    await this.showIgnoreBrowser(this._browserSubpath || '', true);
   },
 
   async loadFolderDetail(id) {
@@ -1178,11 +1253,15 @@ const app = {
     }
   },
 
-  toggleGlobalPause() {
+  async toggleGlobalPause() {
     // 暂停/恢复所有文件夹
     const allPaused = this.folders.every(f => f.paused);
     this.folders.forEach(f => { f.paused = !allPaused; });
-    API.setConfig(this.config);
+    try {
+      await API.setConfig(this.config);
+    } catch (e) {
+      console.error('[toggleGlobalPause] setConfig failed:', e);
+    }
     this.renderFolders();
   },
 
@@ -1197,7 +1276,9 @@ const app = {
   async saveNote() {
     if (!this.selectedFolder || !this.sidecarOk) return;
     const note = document.getElementById('noteArea').value;
-    await API.setNote(this.selectedFolder.path, note);
+    const path = this.selectedFolder.path;
+    await API.setSyncIgnoreNote(path, note);
+    console.log(`[saveNote] saved to .sync-ignore NOTE block: ${path}`);
     this.notes[this.selectedFolder.id] = note;
     this.renderFolders();
   },
@@ -1325,10 +1406,29 @@ const app = {
     // 先关闭弹窗（避免等待后端响应时卡住）
     this.closeModal('folderSettingsModal');
 
-    // 路径变更 / 路径缺失 / 不在本地 → 记录 pending，UI 通过 renderFolders 自动处理
-    if (notInLocal || isLocalMissing || pathChanged) {
+    if (pathChanged && folder && !isLocalMissing) {
+      // 场景：已同步文件夹改路径 → 立即无感迁移（暂停→移文件→更新配置→恢复）
+      console.log(`[saveFolderSettings] ${id}: path changed on synced folder, starting migrate`);
+      // 先更新其他非路径字段
+      folder.label = newLabel;
+      folder.rescanIntervalS = newInterval;
+      folder.type = newType;
+      folder.devices = checkedDevices;
+      await API.setConfig(this.config);
+      // 再执行无感迁移
+      if (this.sidecarOk) {
+        const badge = document.querySelector(`.folder-card[data-id="${id}"] .folder-badge`);
+        if (badge) { badge.textContent = '迁移中...'; badge.className = 'folder-badge syncing'; }
+        const result = await API.migratePath(id, newPath);
+        if (result.error) {
+          alert(`路径迁移失败: ${result.error}`);
+        } else {
+          console.log(`[saveFolderSettings] ${id}: migrate done, steps:`, result.steps);
+        }
+      }
+    } else if (notInLocal || isLocalMissing || pathChanged) {
+      // 场景：localMissing / 不在本地 / 首次设置路径 → 记录 pending，等用户手动点 |> 拉取
       console.log(`[saveFolderSettings] ${id}: recording pending path change to "${newPath}"`);
-      // 记录待执行的路径变更
       this._pendingPathChange = this._pendingPathChange || {};
       this._pendingPathChange[id] = newPath;
       await this.renderFolders();
@@ -1376,9 +1476,11 @@ const app = {
     const deleteNasFiles = document.getElementById('deleteNasFiles')?.checked || false;
     if (this.sidecarOk) {
       try { await API.sideFetch('/api/delete-folder', 'POST', { folderId: id, deleteNasFiles }); } catch (e) {}
+    } else {
+      // sidecar 不可用时才由前端直接操作本地配置
+      this.config.folders = this.config.folders.filter(f => f.id !== id);
+      await API.setConfig(this.config);
     }
-    this.config.folders = this.config.folders.filter(f => f.id !== id);
-    await API.setConfig(this.config);
     this.closeModal('folderSettingsModal');
     this.selectedFolder = null;
     await this.refresh();
@@ -1438,6 +1540,51 @@ const app = {
     await this.refresh();
   },
 
+  async pasteClipboardPath(pathInputId, labelInputId) {
+    const pathEl = document.getElementById(pathInputId);
+    const labelEl = labelInputId ? document.getElementById(labelInputId) : null;
+    const errEl = document.getElementById('addPathError');
+    try {
+      const text = (await navigator.clipboard.readText()).trim().replace(/^["']|["']$/g, '');
+      console.log('[pasteClipboardPath] clipboard text:', text);
+      if (!text) {
+        if (errEl) { errEl.style.display = 'block'; errEl.textContent = '剪贴板为空'; }
+        return;
+      }
+      if (pathEl) {
+        pathEl.value = text;
+        pathEl.style.borderColor = '';
+      }
+      // 自动填显示名称（取路径最后一段，每次都更新）
+      if (labelEl) {
+        const parts = text.replace(/\\/g, '/').split('/').filter(Boolean);
+        if (parts.length) labelEl.value = parts[parts.length - 1];
+      }
+      if (errEl) errEl.style.display = 'none';
+    } catch (e) {
+      // 用户拒绝权限或浏览器不支持时，fallback 到 sidecar
+      console.warn('[pasteClipboardPath] clipboard API failed, fallback to sidecar:', e.message);
+      if (!this.sidecarOk) {
+        if (errEl) { errEl.style.display = 'block'; errEl.textContent = '无法读取剪贴板，请手动粘贴路径'; }
+        return;
+      }
+      try {
+        const data = await API.sideFetch('/api/clipboard-path');
+        if (data && data.path) {
+          if (pathEl) { pathEl.value = data.path; pathEl.style.borderColor = ''; }
+          if (labelEl && data.label && !labelEl.value) labelEl.value = data.label;
+          if (errEl) errEl.style.display = 'none';
+        } else {
+          const err = (data && data.error) || '剪贴板中没有文件路径';
+          if (errEl) { errEl.style.display = 'block'; errEl.textContent = err; }
+        }
+      } catch (e2) {
+        if (errEl) { errEl.style.display = 'block'; errEl.textContent = '读取剪贴板失败，请手动粘贴路径'; }
+      }
+    }
+  },
+
+
   showAddFolder() {
     document.getElementById('modalTitle').textContent = '添加同步文件夹';
     document.getElementById('modalBody').innerHTML = `
@@ -1445,7 +1592,8 @@ const app = {
         <label class="form-label">文件夹路径</label>
         <div class="path-row">
           <input class="form-input" id="addPath" placeholder="D:\\MyFolder">
-          <button>浏览</button>
+          <button onclick="app.pasteClipboardPath('addPath', 'addLabel')" title="读取剪贴板中的路径">粘贴</button>
+          <button onclick="app.openDirBrowser('addPath')">浏览</button>
         </div>
         <div class="form-hint" id="addPathError" style="color:var(--red);display:none"></div>
         <div class="form-hint">将自动创建 .stfolder 标记文件</div>
@@ -1852,7 +2000,10 @@ const app = {
         if (targetId === 'settPath') {
           this.showFolderSettings(this._editingFolderId);
           setTimeout(() => { document.getElementById('settPath').value = path; }, 50);
-        } else if (targetId === 'addPath' || targetId === 'syncLocalPath') {
+        } else if (targetId === 'addPath') {
+          this.showAddFolder();
+          setTimeout(() => { document.getElementById('addPath').value = path; }, 50);
+        } else if (targetId === 'syncLocalPath') {
           const el = document.getElementById(targetId);
           if (el) el.value = path;
         }
@@ -1861,9 +2012,11 @@ const app = {
   },
 
   closeDirBrowser() {
-    // 如果是从设置弹窗打开的，恢复设置弹窗
+    // 如果是从设置/添加弹窗打开的，恢复对应弹窗
     if (this._dirBrowserTarget === 'settPath' && this._editingFolderId) {
       this.showFolderSettings(this._editingFolderId);
+    } else if (this._dirBrowserTarget === 'addPath') {
+      this.showAddFolder();
     } else {
       this.closeModal('folderSettingsModal');
     }

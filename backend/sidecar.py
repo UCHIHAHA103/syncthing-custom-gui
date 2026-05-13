@@ -36,6 +36,11 @@ NAS_API_KEY = os.environ.get("NAS_API_KEY", "")
 NAS_SYNCTHING_DATA_PREFIX = "/var/syncthing"  # 容器内挂载路径前缀
 NAS_SSH_OK = False  # 运行时检测，SSH 不可用时自动降级
 
+# 云服务器配置（从环境变量读取，避免硬编码）
+CLOUD_HOST = os.environ.get("CLOUD_HOST", "42.192.65.73")
+CLOUD_API_KEY = os.environ.get("CLOUD_API_KEY", "qzyo5HW5vx9vJkyQYegMDbbUJL9AZoeU")
+CLOUD_SSH_BIND = os.environ.get("CLOUD_SSH_BIND", "")  # 可选：指定出口 IP（家里电脑用 192.168.3.35）
+
 # NAS 状态缓存（后台线程定期刷新，前端直接读取）
 _nas_status_cache = {}  # {folder_id: {globalFiles, globalBytes, state, lastUpdate}}
 _nas_status_lock = threading.Lock()
@@ -174,7 +179,10 @@ _folder_mtime_cache = {}  # {folder_id: last_known_max_mtime}
 
 
 def file_change_watcher():
-    """后台线程：每 3 秒检测同步文件夹中是否有新文件，主动触发 rescan"""
+    """后台线程：每 3 秒检测同步文件夹中是否有新文件，主动触发 rescan
+    注意：只检测根目录和一级子目录的 mtime（两层深度）。
+    深层目录（folder/a/b/c/）的变化由 Syncthing 自带 fsWatcher 覆盖，此处仅作补充。
+    """
     global _folder_mtime_cache
     import urllib.parse
     while True:
@@ -373,7 +381,7 @@ def transfer_event_watcher():
 
         except Exception as e:
             if "timed out" not in str(e).lower():
-                pass  # 安静处理超时
+                print(f"[transfer-log] error: {e}")
         time.sleep(1)
 
 
@@ -493,7 +501,78 @@ def syncthing_api(method, endpoint, data=None, timeout=10):
         return None
 
 
+
+
+
+
+
+# ===== 剪贴板读取（Win32 ctypes，无子进程）=====
+
+def _read_clipboard_path():
+    """从 Windows 剪贴板读取文件/目录路径，优先 CF_HDROP，fallback CF_UNICODETEXT"""
+    import ctypes
+    import time
+
+    CF_HDROP = 15
+    CF_UNICODETEXT = 13
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    shell32 = ctypes.windll.shell32
+
+    # OpenClipboard 在无消息循环的线程里偶尔返回 0，加重试
+    opened = False
+    for _ in range(5):
+        if user32.OpenClipboard(None):
+            opened = True
+            break
+        time.sleep(0.05)
+
+    if not opened:
+        return ""
+
+    try:
+        # 优先 CF_HDROP（资源管理器 Ctrl+C 复制文件/文件夹）
+        h = user32.GetClipboardData(CF_HDROP)
+        if h:
+            try:
+                shell32.DragQueryFileW.restype = ctypes.c_uint
+                shell32.DragQueryFileW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_uint]
+                count = shell32.DragQueryFileW(h, 0xFFFFFFFF, None, 0)
+                if count > 0:
+                    buf = ctypes.create_unicode_buffer(32768)
+                    shell32.DragQueryFileW(h, 0, buf, 32768)
+                    val = buf.value
+                    if val:
+                        return val
+            except Exception:
+                pass
+
+        # fallback：CF_UNICODETEXT（复制的文本路径）
+        h2 = user32.GetClipboardData(CF_UNICODETEXT)
+        if h2:
+            ptr = kernel32.GlobalLock(h2)
+            if ptr:
+                try:
+                    text = ctypes.wstring_at(ptr).strip().strip('"').strip("'")
+                    return text
+                finally:
+                    kernel32.GlobalUnlock(h2)
+    finally:
+        user32.CloseClipboard()
+
+    return ""
+
+
 # ===== 备注管理 =====
+
+
+
+
+
+
+
+
 
 def find_stfolder_txt(folder_path):
     """找到 .stfolder/syncthing-folder-*.txt"""
@@ -567,6 +646,124 @@ def get_global_ignore():
     return []
 
 
+_NOTE_START = "// --- NOTE START ---"
+_NOTE_END   = "// --- NOTE END ---"
+
+
+def read_sync_ignore_note(sync_ignore_path):
+    """从 .sync-ignore 文件读取备注（NOTE 块中每行去掉 '// ' 前缀）"""
+    p = Path(sync_ignore_path)
+    if not p.exists():
+        return ""
+    lines = p.read_text(encoding="utf-8").splitlines()
+    in_note = False
+    note_lines = []
+    for line in lines:
+        if line.strip() == _NOTE_START:
+            in_note = True
+            continue
+        if line.strip() == _NOTE_END:
+            break
+        if in_note:
+            # 去掉 "// " 前缀还原原始文本
+            if line.startswith("// "):
+                note_lines.append(line[3:])
+            elif line == "//":
+                note_lines.append("")
+            else:
+                note_lines.append(line)
+    return "\n".join(note_lines)
+
+
+def write_sync_ignore_note(sync_ignore_path, note):
+    """把备注写入 .sync-ignore 文件（NOTE 块），不影响忽略规则"""
+    import subprocess
+    p = Path(sync_ignore_path)
+    if not p.exists():
+        # 文件不存在先创建空的
+        write_sync_ignore(p, "// 同步忽略规则 - mode: blacklist\n")
+    # 写入前先取消隐藏属性（Windows 隐藏文件直接写会 PermissionError）
+    try:
+        subprocess.run(["attrib", "-h", str(p)], capture_output=True, timeout=5)
+    except Exception:
+        pass
+    content = p.read_text(encoding="utf-8")
+    new_content = _inject_note_block(content, note)
+    p.write_text(new_content, encoding="utf-8")
+    # 恢复隐藏属性
+    try:
+        subprocess.run(["attrib", "+h", str(p)], capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+
+def _extract_note_block(content):
+    """从文件内容中提取 NOTE 块原文（含 START/END 标记行），返回 (note_block_str, rest_content)"""
+    lines = content.splitlines(keepends=True)
+    note_lines = []
+    rest_lines = []
+    in_note = False
+    for line in lines:
+        stripped = line.rstrip("\r\n")
+        if stripped == _NOTE_START:
+            in_note = True
+            note_lines.append(line)
+            continue
+        if stripped == _NOTE_END:
+            note_lines.append(line)
+            in_note = False
+            continue
+        if in_note:
+            note_lines.append(line)
+        else:
+            rest_lines.append(line)
+    return "".join(note_lines), "".join(rest_lines)
+
+
+def _build_note_block(note):
+    """把备注文本转换成注释块字符串"""
+    if not note or not note.strip():
+        return ""
+    lines = [_NOTE_START]
+    for line in note.splitlines():
+        if line == "":
+            lines.append("//")
+        else:
+            lines.append("// " + line)
+    lines.append(_NOTE_END)
+    return "\n".join(lines) + "\n"
+
+
+def _inject_note_block(content, note):
+    """把 note 块注入到 content 最前面（替换旧的 NOTE 块）"""
+    _, rest = _extract_note_block(content)
+    note_block = _build_note_block(note)
+    return note_block + rest
+
+
+def write_sync_ignore(path, content):
+    """写入 .sync-ignore 并设置 Windows 隐藏属性（自动保留已有的 NOTE 块）"""
+    import subprocess
+    p = Path(path)
+    # 保留已有 NOTE 块
+    if p.exists():
+        existing = p.read_text(encoding="utf-8")
+        note_block, _ = _extract_note_block(existing)
+        if note_block:
+            content = note_block + content
+        # 写入前先取消隐藏（Windows 隐藏文件直接写会 PermissionError）
+        try:
+            subprocess.run(["attrib", "-h", str(p)], capture_output=True, timeout=5)
+        except Exception:
+            pass
+    p.write_text(content, encoding="utf-8")
+    # Windows 隐藏属性（+h），非 Windows 系统静默跳过
+    try:
+        subprocess.run(["attrib", "+h", str(p)], capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+
 def set_global_ignore(rules):
     content = "// 全局忽略规则\n" + "\n".join(rules) + "\n"
     GLOBAL_IGNORE_FILE.write_text(content, encoding="utf-8")
@@ -623,39 +820,49 @@ def sync_global_ignore_to_folders():
 # ===== 路径搜索 =====
 
 def find_folder_path(name):
-    """在本地磁盘上搜索文件夹名，返回匹配的完整路径列表"""
+    """在本地磁盘上搜索文件夹名，返回匹配的完整路径列表（最多 4 级深度）"""
     import string
     results = []
+
+    # 跳过这些高噪音/系统目录（名称前缀匹配）
+    SKIP_DIRS = {
+        'windows', 'program files', 'program files (x86)', 'programdata',
+        '$recycle.bin', 'system volume information', 'recovery',
+        'perflogs', 'boot', 'efi',
+    }
+
+    def should_skip(entry_name):
+        return entry_name.startswith(('.', '$')) or entry_name.lower() in SKIP_DIRS
+
+    def search_dir(parent, depth):
+        if depth == 0:
+            return
+        try:
+            for entry in os.scandir(parent):
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+                if should_skip(entry.name):
+                    continue
+                if entry.name == name:
+                    results.append(entry.path)
+                    # 找到了不再往深搜这一支
+                    continue
+                if depth > 1:
+                    search_dir(entry.path, depth - 1)
+        except (PermissionError, OSError):
+            pass
+
     # 获取所有盘符
-    drives = []
     for letter in string.ascii_uppercase:
         drive = f"{letter}:\\"
         if os.path.isdir(drive):
-            drives.append(drive)
-
-    # 在常见位置搜索（避免全盘扫描太慢）
-    search_paths = []
-    for d in drives:
-        # 搜索盘符根目录下一级和二级
-        try:
-            for entry in os.scandir(d):
-                if entry.is_dir() and entry.name == name:
-                    results.append(entry.path)
-                elif entry.is_dir() and not entry.name.startswith(('.', '$')):
-                    search_paths.append(entry.path)
-        except PermissionError:
-            pass
-
-    # 搜索二级目录
-    for parent in search_paths:
-        try:
-            for entry in os.scandir(parent):
-                if entry.is_dir() and entry.name == name:
-                    results.append(entry.path)
-        except PermissionError:
-            pass
+            search_dir(drive, depth=4)
+        if len(results) >= 10:
+            break
 
     return results[:10]  # 最多返回 10 个
+
+
 
 
 # ===== 无感改路径 =====
@@ -688,10 +895,20 @@ def migrate_folder_path(folder_id, new_path):
 
     # 2. 移动文件
     try:
+        import subprocess
         new_path_obj = Path(new_path)
         new_path_obj.mkdir(parents=True, exist_ok=True)
         # 使用 robocopy 移动（Windows），保留属性
-        os.system(f'robocopy "{old_path}" "{new_path}" /E /MOVE /NFL /NDL /NJH /NJS')
+        # robocopy 返回值：0=无文件, 1=成功复制, 2=额外文件, 3=1+2, >=8=有错误/失败
+        result = subprocess.run(
+            f'robocopy "{old_path}" "{new_path}" /E /MOVE /NFL /NDL /NJH /NJS',
+            shell=True, capture_output=True
+        )
+        if result.returncode >= 8:
+            # 回滚：恢复暂停状态
+            folder["paused"] = False
+            syncthing_api("PUT", "/rest/config", config)
+            return {"error": f"文件移动失败 (robocopy 返回 {result.returncode})", "steps": steps}
         steps.append(f"已移动文件: {old_path} → {new_path}")
     except Exception as e:
         # 回滚：恢复暂停状态
@@ -765,7 +982,7 @@ def add_folder(path, label=None, paused=True):
     # 创建 .sync-ignore（本地新建，没有远端版本，需要直接创建）
     sync_ignore = path_obj / ".sync-ignore"
     if not sync_ignore.exists():
-        sync_ignore.write_text("// 同步忽略规则 - mode: blacklist\n", encoding="utf-8")
+        write_sync_ignore(sync_ignore, "// 同步忽略规则 - mode: blacklist\n")
 
     # 生成文件夹 ID（保留原始大小写）
     folder_id = path_obj.name.replace(" ", "-")[:32]
@@ -853,13 +1070,30 @@ class SidecarHandler(BaseHTTPRequestHandler):
             else:
                 self.send_json({"error": "需要 path 参数"}, 400)
 
+        elif path == "/api/sync-ignore-note":
+            # 从 .sync-ignore 读取备注
+            params = parse_qs(parsed.query)
+            folder_path = params.get("path", [""])[0]
+            if folder_path:
+                sync_ignore_path = Path(folder_path) / ".sync-ignore"
+                note = read_sync_ignore_note(sync_ignore_path)
+                print(f"[sidecar] sync-ignore-note GET: {folder_path} -> {len(note)} chars")
+                self.send_json({"note": note})
+            else:
+                self.send_json({"error": "需要 path 参数"}, 400)
+
         elif path == "/api/notes":
-            # 批量获取所有文件夹备注
+            # 批量获取所有文件夹备注（优先从 .sync-ignore 读取）
             config = syncthing_api("GET", "/rest/config")
             notes = {}
             if config:
                 for f in config.get("folders", []):
-                    notes[f["id"]] = read_note(f.get("path", ""))
+                    fp = f.get("path", "")
+                    sync_ignore_path = Path(fp) / ".sync-ignore" if fp else None
+                    if sync_ignore_path and sync_ignore_path.exists():
+                        notes[f["id"]] = read_sync_ignore_note(sync_ignore_path)
+                    else:
+                        notes[f["id"]] = read_note(fp)
             self.send_json({"notes": notes})
 
         elif path == "/api/find-path":
@@ -1077,6 +1311,19 @@ class SidecarHandler(BaseHTTPRequestHandler):
             else:
                 self.send_json({"error": "路径不存在"}, 400)
 
+        elif path == "/api/clipboard-path":
+            # 读取剪贴板中的文件/目录路径（ctypes Win32，无子进程，<10ms）
+            try:
+                clip_path = _read_clipboard_path()
+                if clip_path and os.path.exists(clip_path):
+                    label = os.path.basename(clip_path)
+                    print(f"[sidecar] clipboard-path: {clip_path}")
+                    self.send_json({"path": clip_path, "label": label})
+                else:
+                    self.send_json({"path": "", "label": "", "error": "剪贴板中没有文件路径"})
+            except Exception as e:
+                self.send_json({"path": "", "label": "", "error": str(e)})
+
         elif path.startswith("/rest/"):
             # 代理 Syncthing REST API
             # connections/stats/db 端点可能超时（NAS 离线时），用短超时
@@ -1096,6 +1343,18 @@ class SidecarHandler(BaseHTTPRequestHandler):
         if path.startswith("/rest/"):
             body = self.read_body()
             result = syncthing_api("PUT", self.path, body)
+            if result is not None:
+                self.send_json(result)
+            else:
+                self.send_json({"success": True})
+        else:
+            self.send_json({"error": "not found"}, 404)
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path.startswith("/rest/"):
+            result = syncthing_api("DELETE", self.path)
             if result is not None:
                 self.send_json(result)
             else:
@@ -1137,6 +1396,18 @@ class SidecarHandler(BaseHTTPRequestHandler):
             note = body.get("note", "")
             if folder_path:
                 write_note(folder_path, note)
+                self.send_json({"success": True})
+            else:
+                self.send_json({"error": "需要 path"}, 400)
+
+        elif path == "/api/sync-ignore-note":
+            # 把备注写入 .sync-ignore 的 NOTE 块
+            folder_path = body.get("path", "")
+            note = body.get("note", "")
+            if folder_path:
+                sync_ignore_path = Path(folder_path) / ".sync-ignore"
+                write_sync_ignore_note(sync_ignore_path, note)
+                print(f"[sidecar] sync-ignore-note POST: {folder_path}, {len(note)} chars")
                 self.send_json({"success": True})
             else:
                 self.send_json({"error": "需要 path"}, 400)
@@ -1312,7 +1583,7 @@ class SidecarHandler(BaseHTTPRequestHandler):
                     rules.append("!/.sync-ignore")
             content = f"// 同步忽略规则 - mode: {mode_str}\n"
             content += "\n".join(rules) + "\n"
-            sync_ignore_path.write_text(content, encoding="utf-8")
+            write_sync_ignore(sync_ignore_path, content)
 
             # 确保 .stignore 有 #include .sync-ignore（首次编辑时可能还没有）
             ensure_sync_ignore_include(folder_path, folder_id)
@@ -1417,31 +1688,31 @@ class SidecarHandler(BaseHTTPRequestHandler):
                     print(f"[sidecar] delete-folder: no SSH, local-only removal")
 
                 # 删除云服务器上的配置和数据
-                cloud_api_key = "qzyo5HW5vx9vJkyQYegMDbbUJL9AZoeU"
-                cloud_host = "42.192.65.73"
-                try:
-                    import urllib.request
-                    # 删除云服务器文件夹配置
-                    req = urllib.request.Request(
-                        f"http://{cloud_host}:8384/rest/config/folders/{encoded_id}",
-                        headers={"X-API-Key": cloud_api_key},
-                        method="DELETE"
-                    )
-                    urllib.request.urlopen(req, timeout=10)
-                    print(f"[sidecar] delete-folder: removed from cloud server config")
-                    # 删除云服务器数据文件
-                    if delete_nas_files:
-                        cloud_path = f"/home/ubuntu/Sync/{folder_id}"
-                        try:
-                            rm_result = subprocess.run(
-                                ["ssh", "-o", "ConnectTimeout=5", "-b", "192.168.3.35", "cloud", f"rm -rf '{cloud_path}'"],
-                                capture_output=True, timeout=15
-                            )
-                            print(f"[sidecar] delete-folder: removed cloud files at {cloud_path}")
-                        except Exception as e:
-                            print(f"[sidecar] delete-folder: cloud file removal failed: {e}")
-                except Exception as e:
-                    print(f"[sidecar] delete-folder: cloud cleanup failed: {e}")
+                if CLOUD_HOST and CLOUD_API_KEY:
+                    try:
+                        import urllib.request
+                        # 删除云服务器文件夹配置
+                        req = urllib.request.Request(
+                            f"http://{CLOUD_HOST}:8384/rest/config/folders/{encoded_id}",
+                            headers={"X-API-Key": CLOUD_API_KEY},
+                            method="DELETE"
+                        )
+                        urllib.request.urlopen(req, timeout=10)
+                        print(f"[sidecar] delete-folder: removed from cloud server config")
+                        # 删除云服务器数据文件
+                        if delete_nas_files:
+                            cloud_path = f"/home/ubuntu/Sync/{folder_id}"
+                            try:
+                                ssh_cmd = ["ssh", "-o", "ConnectTimeout=5"]
+                                if CLOUD_SSH_BIND:
+                                    ssh_cmd += ["-b", CLOUD_SSH_BIND]
+                                ssh_cmd += ["cloud", f"rm -rf '{cloud_path}'"]
+                                subprocess.run(ssh_cmd, capture_output=True, timeout=15)
+                                print(f"[sidecar] delete-folder: removed cloud files at {cloud_path}")
+                            except Exception as e:
+                                print(f"[sidecar] delete-folder: cloud file removal failed: {e}")
+                    except Exception as e:
+                        print(f"[sidecar] delete-folder: cloud cleanup failed: {e}")
 
                 # 删除本地配置
                 local_config = syncthing_api("GET", "/rest/config")
@@ -1552,6 +1823,75 @@ class SidecarHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "not found"}, 404)
 
 
+# ===== Syncthing 健康检测 + 自动重启 =====
+
+def syncthing_watchdog():
+    """后台线程：每 15 秒 ping Syncthing，连续 3 次超时则自动重启"""
+    import subprocess
+    import shutil
+    PING_INTERVAL = 15      # 检测间隔（秒）
+    FAIL_THRESHOLD = 3      # 连续失败次数阈值
+    RESTART_COOLDOWN = 60   # 重启后冷却时间（秒），避免反复重启
+    fail_count = 0
+    time.sleep(10)  # 等 Syncthing 完全启动
+    print("[watchdog] Syncthing 健康检测已启动（每 15 秒，连续 3 次失败自动重启）")
+    while True:
+        try:
+            url = f"{SYNCTHING_API}/rest/system/ping"
+            req = urllib.request.Request(url, headers={"X-API-Key": SYNCTHING_API_KEY})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    fail_count = 0
+                else:
+                    fail_count += 1
+                    print(f"[watchdog] ping 返回 {resp.status}，失败计数: {fail_count}/{FAIL_THRESHOLD}")
+        except Exception as e:
+            fail_count += 1
+            print(f"[watchdog] ping 失败 ({fail_count}/{FAIL_THRESHOLD}): {e}")
+
+        if fail_count >= FAIL_THRESHOLD:
+            print(f"[watchdog] 连续 {FAIL_THRESHOLD} 次失败，尝试重启 Syncthing...")
+            fail_count = 0
+            # 找到 syncthing 可执行文件
+            syncthing_exe = shutil.which("syncthing")
+            if not syncthing_exe:
+                # 尝试常见路径
+                for candidate in [
+                    r"C:\Program Files\Syncthing\syncthing.exe",
+                    r"C:\syncthing\syncthing.exe",
+                    os.path.expandvars(r"%LOCALAPPDATA%\Syncthing\syncthing.exe"),
+                ]:
+                    if os.path.isfile(candidate):
+                        syncthing_exe = candidate
+                        break
+            if not syncthing_exe:
+                print("[watchdog] 未找到 syncthing 可执行文件，跳过重启")
+                time.sleep(RESTART_COOLDOWN)
+                continue
+            # 强杀旧进程
+            try:
+                subprocess.run(["taskkill", "/F", "/IM", "syncthing.exe"],
+                               capture_output=True, timeout=10)
+                time.sleep(2)
+            except Exception as e:
+                print(f"[watchdog] 终止旧进程失败: {e}")
+            # 启动新进程
+            try:
+                subprocess.Popen(
+                    [syncthing_exe, "--no-browser"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000),
+                )
+                print(f"[watchdog] Syncthing 已重启: {syncthing_exe}")
+            except Exception as e:
+                print(f"[watchdog] 重启失败: {e}")
+            time.sleep(RESTART_COOLDOWN)
+            continue
+
+        time.sleep(PING_INTERVAL)
+
+
 def main():
     import sys
     global SYNCTHING_API_KEY
@@ -1585,6 +1925,10 @@ def main():
     # 启动传输日志监控线程
     transfer_log_thread = threading.Thread(target=transfer_event_watcher, daemon=True)
     transfer_log_thread.start()
+
+    # 启动 Syncthing 健康检测 + 自动重启线程
+    watchdog_thread = threading.Thread(target=syncthing_watchdog, daemon=True)
+    watchdog_thread.start()
 
     # 启动时一次性同步全局忽略规则到 .stignore
     def init_global_ignore():

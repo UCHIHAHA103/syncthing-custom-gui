@@ -17,8 +17,25 @@ const API = {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(data);
     }
-    const resp = await fetch(`${this.sidecar}${endpoint}`, opts);
-    if (!resp.ok) throw new Error(`API ${resp.status}: ${endpoint}`);
+    let resp;
+    try {
+      resp = await fetch(`${this.sidecar}${endpoint}`, opts);
+    } catch (e) {
+      // sidecar 本身连不上（8385 没跑）
+      throw new Error('无法连接到 Sidecar 服务，请确认已启动');
+    }
+    if (!resp.ok) {
+      // 根据状态码给出具体提示
+      if (resp.status === 502 || resp.status === 503) {
+        throw new Error('Syncthing 未运行，请先启动 SyncTrayzor 或 Syncthing');
+      } else if (resp.status === 403) {
+        throw new Error('API Key 错误，请检查 Sidecar 启动参数');
+      } else if (resp.status === 404) {
+        throw new Error('接口不存在，请检查 Syncthing 版本是否兼容');
+      } else {
+        throw new Error(`Syncthing 响应异常（${resp.status}），请检查服务状态`);
+      }
+    }
     const text = await resp.text();
     return text ? JSON.parse(text) : null;
   },
@@ -51,7 +68,12 @@ const API = {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(data);
     }
-    const resp = await fetch(`${this.sidecar}${endpoint}`, opts);
+    let resp;
+    try {
+      resp = await fetch(`${this.sidecar}${endpoint}`, opts);
+    } catch (e) {
+      throw new Error('无法连接到 Sidecar 服务，请确认已启动');
+    }
     return resp.json();
   },
 
@@ -65,6 +87,8 @@ const API = {
   async getNote(path) { return this.sideFetch(`/api/note?path=${encodeURIComponent(path)}`); },
   async getAllNotes() { return this.sideFetch('/api/notes'); },
   async setNote(path, note) { return this.sideFetch('/api/note', 'POST', { path, note }); },
+  async getSyncIgnoreNote(path) { return this.sideFetch(`/api/sync-ignore-note?path=${encodeURIComponent(path)}`); },
+  async setSyncIgnoreNote(path, note) { return this.sideFetch('/api/sync-ignore-note', 'POST', { path, note }); },
   async addFolder(path, label, autoResume = false) { return this.sideFetch('/api/add-folder', 'POST', { path, label, autoResume: !!autoResume }); },
   async findPath(name) { return this.sideFetch(`/api/find-path?name=${encodeURIComponent(name)}`); },
   async getNasFolders() { return this.sideFetch('/api/nas-folders'); },
